@@ -1,0 +1,31 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+
+license = "MIT"
+
+[[mods]]
+modId = "portint"
+version = "${file.jarVersion}"
+displayName = "Portable Interface"
+authors = "User"
+description = '''
+A Minecraft mod that adds portable interface blocks for item transfer between dimensions, similar to AE2 ME Interface.
+This mod requires Applied Energistics 2.
+'''
+logoFile = "portint.png"
+
+[[dependencies.portint]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+
+[[dependencies.portint]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,)"
+
+[[dependencies.portint]]
+modId = "ae2"
+type = "required"
+versionRange = "[19.2,)"
+ordering = "AFTER"

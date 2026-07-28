@@ -1,0 +1,31 @@
+# Build output
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Temp
+temp/
+temp_assets/
+temp_extract/
+compile_out/
+output/
+
+# Logs
+*.log
+*.txt
+
+# JAR (binary)
+*.jar
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Non-source dependencies
+appeng/
+mekanism/

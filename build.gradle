@@ -1,0 +1,53 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.141'
+    id 'idea'
+}
+
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = mod_version
+group = mod_group_id
+
+repositories {
+    maven {
+        url "https://api.modrinth.com/maven"
+    }
+    maven {
+        name = "ModMaven"
+        url = "https://modmaven.dev/"
+    }
+    maven {
+        name = "CurseMaven"
+        url = "https://cursemaven.com"
+    }
+}
+
+base { archivesName = mod_id }
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+    runs {
+        client { client() }
+        server { server(); programArgument '--nogui' }
+    }
+    mods { "${mod_id}" { sourceSet(sourceSets.main) } }
+}
+
+dependencies {
+    implementation "curse.maven:applied-energistics-2-223794:6488853"
+    compileOnly "curse.maven:jei-238222:6075247"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
