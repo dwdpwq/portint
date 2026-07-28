@@ -2,15 +2,27 @@ modLoader = "javafml"
 loaderVersion = "[4,)"
 
 license = "MIT"
+issueTrackerURL = "https://github.com/dwdpwq/portint/issues"
 
 [[mods]]
 modId = "portint"
 version = "${file.jarVersion}"
-displayName = "Portable Interface"
-authors = "User"
+displayName = "PortInt - Portable Interface"
+authors = "Miracle_sever"
 description = '''
-A Minecraft mod that adds portable interface blocks for item transfer between dimensions, similar to AE2 ME Interface.
-This mod requires Applied Energistics 2.
+PortInt adds a portable interface block to AE2 networks, enabling wireless cross-dimensional item, fluid, and chemical transfer.
+
+Features:
+- 9 independent columns, each with its own binding card and 27 filter slots
+- Item / Fluid / Chemical (Mekanism) transport with no hard dependency
+- Whitelist / Blacklist and Input / Output modes per column
+- Upgrade slots: acceleration, range, dimension, and long cards (unlimited rate)
+- Binding cards link to target containers via shift-right-click
+- Real-time binding validation — automatically updates if target container is replaced
+- JEI drag-and-drop ghost item support
+- Bilingual UI (English / Chinese)
+
+Requires Applied Energistics 2. Mekanism and JEI are optional.
 '''
 logoFile = "portint.png"
 
@@ -18,14 +30,33 @@ logoFile = "portint.png"
 modId = "neoforge"
 type = "required"
 versionRange = "[21.1,)"
+ordering = "NONE"
+side = "BOTH"
 
 [[dependencies.portint]]
 modId = "minecraft"
 type = "required"
 versionRange = "[1.21.1,)"
+ordering = "NONE"
+side = "BOTH"
 
 [[dependencies.portint]]
 modId = "ae2"
 type = "required"
 versionRange = "[19.2,)"
 ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.portint]]
+modId = "mekanism"
+type = "optional"
+versionRange = "[10.7,)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.portint]]
+modId = "jei"
+type = "optional"
+versionRange = "[19,)"
+ordering = "AFTER"
+side = "CLIENT"
