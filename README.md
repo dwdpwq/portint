@@ -18,9 +18,9 @@ AE2 附属模组，为 NeoForge 1.21.1 添加便携接口方块。通过绑定�
 | 模组 | 版本 |
 |---|---|
 | NeoForge | 1.21.1 |
-| Applied Energistics 2 | 19.2.x |
+| Applied Energistics 2 |  1.21.1 |
 | Mekanism | 10.7.x（可选，反射调用无硬依赖） |
-| JEI | 19.x（可选） |
+| JEI | 1.21.1（可选） |
 
 ## 构建
 
