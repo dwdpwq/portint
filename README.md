@@ -41,4 +41,8 @@ gradlew jar -x test
 
 ## 许可
 
-MIT License
+本模组代码以 MIT License 发布。
+
+`assets/ae2/` 目录下的屏幕布局文件（`screens/interface.json`）源自 Applied Energistics 2，遵循 LGPLv3 许可。
+Copyright (c) 2013 - 2024 AlgorithmX2 et al.
+AE2 源码仓库：https://github.com/AppliedEnergistics/Applied-Energistics-2
