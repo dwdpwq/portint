@@ -1,0 +1,33 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    " A ",
+    "BCB",
+    "DEF"
+  ],
+  "key": {
+    "A": {
+      "item": "ae2:wireless_access_point"
+    },
+    "B": {
+      "item": "ae2:wireless_booster"
+    },
+    "C": {
+      "item": "minecraft:beacon"
+    },
+    "D": {
+      "item": "ae2:fluix_pearl"
+    },
+    "E": {
+      "item": "ae2:meteorite_compass"
+    },
+    "F": {
+      "item": "ae2:quantum_link"
+    }
+  },
+  "result": {
+    "count": 1,
+    "id": "portint:range_card"
+  }
+}

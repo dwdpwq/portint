@@ -1,0 +1,39 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "ABC",
+    "DEF",
+    "GHA"
+  ],
+  "key": {
+    "A": {
+      "item": "ae2:cell_component_256k"
+    },
+    "B": {
+      "item": "ae2:speed_card"
+    },
+    "C": {
+      "item": "ae2:matter_cannon"
+    },
+    "D": {
+      "item": "ae2:import_bus"
+    },
+    "E": {
+      "item": "ae2:controller"
+    },
+    "F": {
+      "item": "ae2:export_bus"
+    },
+    "G": {
+      "item": "ae2:color_applicator"
+    },
+    "H": {
+      "item": "ae2:capacity_card"
+    }
+  },
+  "result": {
+    "count": 1,
+    "id": "portint:interface_block"
+  }
+}

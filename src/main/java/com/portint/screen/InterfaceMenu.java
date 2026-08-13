@@ -1,6 +1,5 @@
 package com.portint.screen;
 
-import com.portint.block.InterfaceBlockEntity;
 import com.portint.item.ModItems;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.player.Inventory;
@@ -19,13 +18,13 @@ public class InterfaceMenu extends AbstractContainerMenu {
     static final int IMAGE_WIDTH  = 256;
     static final int IMAGE_HEIGHT = 207;
 
-    final InterfaceBlockEntity tile;
+    final IInterfaceBlockEntityAccess tile;
     final ContainerData data;
 
-    public InterfaceMenu(int windowId, Inventory playerInv, InterfaceBlockEntity tile) {
+    public InterfaceMenu(int windowId, Inventory playerInv, IInterfaceBlockEntityAccess tile) {
         super(ModMenuTypes.INTERFACE_MENU.get(), windowId);
         this.tile = tile;
-        this.data = tile.dataAccess;
+        this.data = tile.getDataAccess();
         addDataSlots(data);
 
         Container upgradeInv = tile.getUpgradeInventory();
@@ -170,6 +169,22 @@ public class InterfaceMenu extends AbstractContainerMenu {
             tile.openFilterMenu(player, id - 20);
             return true;
         }
+        if (id >= 30 && id < 39) {
+            tile.adjustSlotPriority(id - 30, -1);
+            return true;
+        }
+        if (id >= 40 && id < 49) {
+            tile.adjustSlotPriority(id - 40, 1);
+            return true;
+        }
+        if (id >= 50 && id < 59) {
+            tile.adjustSlotPriority(id - 50, -10);
+            return true;
+        }
+        if (id >= 60 && id < 69) {
+            tile.adjustSlotPriority(id - 60, 10);
+            return true;
+        }
         return false;
     }
 
@@ -224,13 +239,11 @@ public class InterfaceMenu extends AbstractContainerMenu {
     }
 
     public boolean isOutputMode(int col) {
-        boolean[] m = tile.getOutputModes();
-        return col >= 0 && col < 9 && m[col];
+        return tile.isOutputMode(col);
     }
 
     public boolean isWhitelist(int col) {
-        boolean[] m = tile.getWhitelistModes();
-        return col >= 0 && col < 9 && m[col];
+        return tile.isWhitelist(col);
     }
 
     // ──── custom slots ────

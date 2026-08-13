@@ -29,6 +29,16 @@ public class ModBlocks {
     public static final DeferredItem<BlockItem> INTERFACE_BLOCK_ITEM =
         BLOCK_ITEMS.registerSimpleBlockItem(INTERFACE_BLOCK);
 
+    public static final DeferredBlock<Block> EXTERNAL_STORAGE_BLOCK = BLOCKS.register("external_storage_block",
+        () -> new ExternalStorageBlock(BlockBehaviour.Properties.of()
+            .mapColor(MapColor.COLOR_LIGHT_BLUE)
+            .strength(3.0f, 6.0f)
+            .sound(SoundType.METAL)
+            .requiresCorrectToolForDrops()));
+
+    public static final DeferredItem<BlockItem> EXTERNAL_STORAGE_BLOCK_ITEM =
+        BLOCK_ITEMS.registerSimpleBlockItem(EXTERNAL_STORAGE_BLOCK);
+
     public static void register(IEventBus bus) {
         BLOCKS.register(bus);
         BLOCK_ITEMS.register(bus);

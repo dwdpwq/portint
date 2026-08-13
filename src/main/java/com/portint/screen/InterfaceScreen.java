@@ -1,10 +1,12 @@
 package com.portint.screen;
 
 import appeng.client.gui.Icon;
+import com.portint.block.InterfaceBlockEntity;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Container;
@@ -25,19 +27,26 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
             ResourceLocation.parse("portint:textures/gui/gear_normal.png");
     private static final ResourceLocation GEAR_HOVER  =
             ResourceLocation.parse("portint:textures/gui/gear_hover.png");
+    private static final ResourceLocation PRIORITY_ICON =
+            ResourceLocation.parse("portint:textures/gui/priority_button.png");
 
-    private static final int TEXT_COLOR       = 0xFFC6C6C6;
-    private static final int MUTED_TEXT_COLOR = 0xFF7A7FA0;
+    private static final int TEXT_COLOR       = 0xFF413F54;
 
     private static final int COL_START_X  = 8;
     private static final int COL_SPACING  = 18;
-    private static final int GEAR_Y       = 35;
-    private static final int GEAR_SIZE    = 16;
-    private static final int DIR_BTN_Y    = 74;
-    private static final int DIR_BTN_SIZE = 10;
+    private static final int GEAR_Y          = 35;
+    private static final int GEAR_SIZE       = 16;
+    private static final int DIR_BTN_Y       = 74;
+    private static final int DIR_BTN_SIZE    = 10;
+    private static final int PRIORITY_TEXT_Y = 70;
+
+    private static final int PRIORITY_POS_COLOR = 0xFFFFD700;
+    private static final int PRIORITY_NEG_COLOR = 0xFFFF4444;
+    private static final int PRIORITY_ZERO_COLOR = 0xFFFFFFFF;
 
     private int hoveredGearCol = -1;
     private int hoveredDirCol  = -1;
+    private int hoveredPriorityCol = -1;
     private boolean hoveredUpgrade0;
     private boolean hoveredUpgrade1;
 
@@ -51,9 +60,26 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
 
     @Override
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
-        g.drawString(this.font, this.title, this.titleLabelX, this.titleLabelY, TEXT_COLOR);
+        g.drawString(this.font, this.title, this.titleLabelX, this.titleLabelY, TEXT_COLOR, false);
         g.drawString(this.font, this.playerInventoryTitle, this.inventoryLabelX,
-                123 - this.font.lineHeight - 3, MUTED_TEXT_COLOR);
+                123 - this.font.lineHeight - 3, TEXT_COLOR, false);
+    }
+
+    // ══════════════ AE2 hover highlight (蓝白边框 + 半透明蓝填充) ══════════════
+
+    @Override
+    protected void renderSlotHighlight(GuiGraphics g, Slot slot, int mouseX, int mouseY,
+                                       float partialTick) {
+        if (!slot.isHighlightable()) return;
+        int x = slot.x;
+        int y = slot.y;
+        int borderColor = 0xFFDBEDFF;
+        int fillColor   = 0x6699BFFF;
+        g.hLine(x, x + 16, y - 1, borderColor);
+        g.hLine(x - 1, x + 16, y + 16, borderColor);
+        g.vLine(x - 1, y - 2, y + 16, borderColor);
+        g.vLine(x + 16, y - 2, y + 16, borderColor);
+        g.fillGradient(RenderType.guiOverlay(), x, y, x + 16, y + 16, fillColor, fillColor, 0);
     }
 
     // ══════════════ background ══════════════
@@ -70,7 +96,11 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
         drawUpgradeSlotBg(g, x + 175, y + 22);
 
         // Render column gear & direction buttons
-        renderColumns(g, x, y, mouseX, mouseY);
+        if (menu.tile.hasColumnConfig()) {
+            renderColumns(g, x, y, mouseX, mouseY);
+        } else {
+            renderPriorityButtons(g, x, y, mouseX, mouseY);
+        }
 
         // ── Hover analysis highlight for binding card slots ──
         for (int col = 0; col < 9; col++) {
@@ -80,7 +110,7 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
                 ItemStack stack = menu.tile.getBindingInventory().getItem(col);
                 if (!stack.isEmpty()
                         && stack.has(com.portint.ModDataComponents.BOUND_TARGET.get())) {
-                    g.fill(sx, sy, sx + 16, sy + 16, 0x33FFD700);
+                    g.fill(sx, sy, sx + 16, sy + 16, 0x33DAFFFF);
                 }
             }
         }
@@ -144,6 +174,45 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
                     g.fill(dx, dy, dx + DIR_BTN_SIZE, dy + DIR_BTN_SIZE, 0x33FFFFFF);
                 }
             }
+
+        }
+    }
+
+    // ══════════════ priority buttons ══════════════
+
+    private void renderPriorityButtons(GuiGraphics g, int baseX, int baseY, int mx, int my) {
+        hoveredPriorityCol = -1;
+
+        for (int col = 0; col < 9; col++) {
+            int cx = baseX + COL_START_X + col * COL_SPACING;
+            int cy = baseY + GEAR_Y;
+
+            boolean hover = mx >= cx && mx < cx + GEAR_SIZE
+                    && my >= cy && my < cy + GEAR_SIZE;
+            if (hover) hoveredPriorityCol = col;
+
+            // Render AE2-style priority icon (gray when not hovered, white when hovered)
+            if (hover) {
+                g.blit(PRIORITY_ICON, cx, cy, 0, 0, GEAR_SIZE, GEAR_SIZE, GEAR_SIZE, GEAR_SIZE);
+            } else {
+                g.setColor(0.5f, 0.5f, 0.5f, 1.0f);
+                g.blit(PRIORITY_ICON, cx, cy, 0, 0, GEAR_SIZE, GEAR_SIZE, GEAR_SIZE, GEAR_SIZE);
+                g.setColor(1.0f, 1.0f, 1.0f, 1.0f);
+            }
+
+            // Hover highlight
+            if (hover) {
+                g.fill(cx, cy, cx + GEAR_SIZE, cy + GEAR_SIZE, 0x33FFFFFF);
+            }
+
+            // Priority value centered below the slot
+            int priority = menu.tile.getSlotPriority(col);
+            String prioText = String.valueOf(priority);
+            int textWidth = font.width(prioText);
+            int textColor = priority > 0 ? PRIORITY_POS_COLOR
+                    : (priority < 0 ? PRIORITY_NEG_COLOR : PRIORITY_ZERO_COLOR);
+            g.drawString(font, prioText,
+                    cx + 8 - textWidth / 2, baseY + PRIORITY_TEXT_Y, textColor, false);
         }
     }
 
@@ -165,7 +234,7 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
                 ItemStack stack = hs.getItem();
                 if (stack.has(com.portint.ModDataComponents.BOUND_TARGET.get())) {
                     g.fill(leftPos + hs.x, topPos + hs.y,
-                            leftPos + hs.x + 16, topPos + hs.y + 16, 0x33FFD700);
+                            leftPos + hs.x + 16, topPos + hs.y + 16, 0x33DAFFFF);
 
                     List<Component> analysis = buildAnalysisTooltip(stack);
                     if (!analysis.isEmpty()) {
@@ -180,17 +249,27 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
         }
 
         // ── Column widget tooltips ──
-        if (hoveredGearCol >= 0) {
-            g.renderTooltip(font,
-                    Component.translatable("gui.portint.configure_column", hoveredGearCol + 1),
-                    mouseX, mouseY);
-        }
-        if (hoveredDirCol >= 0) {
-            boolean isOut = menu.isOutputMode(hoveredDirCol);
-            Component tip = Component.translatable(isOut ? "gui.portint.mode_output" : "gui.portint.mode_input");
-            g.renderTooltip(font,
-                    Component.translatable("gui.portint.column_direction", hoveredDirCol + 1, tip),
-                    mouseX, mouseY);
+        if (menu.tile.hasColumnConfig()) {
+            if (hoveredGearCol >= 0) {
+                g.renderTooltip(font,
+                        Component.translatable("gui.portint.configure_column", hoveredGearCol + 1),
+                        mouseX, mouseY);
+            }
+            if (hoveredDirCol >= 0) {
+                boolean isOut = menu.isOutputMode(hoveredDirCol);
+                Component tip = Component.translatable(isOut ? "gui.portint.mode_output" : "gui.portint.mode_input");
+                g.renderTooltip(font,
+                        Component.translatable("gui.portint.column_direction", hoveredDirCol + 1, tip),
+                        mouseX, mouseY);
+            }
+        } else {
+            if (hoveredPriorityCol >= 0) {
+                int priority = menu.tile.getSlotPriority(hoveredPriorityCol);
+                g.renderTooltip(font,
+                        Component.translatable("gui.portint.priority_tooltip",
+                                hoveredPriorityCol + 1, priority),
+                        mouseX, mouseY);
+            }
         }
 
         // ── Upgrade slot tooltips ──
@@ -207,7 +286,7 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
                 lines.add(Component.translatable("gui.portint.available_upgrades").withStyle(ChatFormatting.WHITE));
                 lines.add(Component.translatable("gui.portint.upgrade_range").withStyle(ChatFormatting.GRAY));
                 lines.add(Component.translatable("gui.portint.upgrade_dimension").withStyle(ChatFormatting.GRAY));
-                lines.add(Component.translatable("gui.portint.upgrade_long").withStyle(ChatFormatting.GRAY));
+                lines.add(Component.translatable("gui.portint.upgrade_long", InterfaceBlockEntity.LONG_CARD_ITEM_RATE).withStyle(ChatFormatting.GRAY));
                 g.renderTooltip(font, lines, Optional.empty(), mouseX, mouseY);
             }
         }
@@ -228,8 +307,8 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
                         .withStyle(ChatFormatting.WHITE));
             }
 
-            lines.add(Component.literal(
-                    "  XYZ: " + bt.pos().getX() + ", " + bt.pos().getY() + ", " + bt.pos().getZ())
+            lines.add(Component.translatable("gui.portint.bound_coords",
+                    bt.pos().getX(), bt.pos().getY(), bt.pos().getZ())
                     .withStyle(ChatFormatting.YELLOW));
             lines.add(Component.literal(
                     "  维度: " + bt.dimension().location())
@@ -237,21 +316,23 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
 
             // Distance check
             var tile = menu.tile;
-            if (tile.getLevel() != null && bt.dimension().equals(tile.getLevel().dimension())) {
-                double dist = Math.sqrt(bt.pos().distSqr(tile.getBlockPos()));
-                int iDist = (int) Math.round(dist);
-                boolean hasRange = tile.hasRangeCard();
-                boolean hasDim = tile.hasDimCard();
-                int maxRange = (hasRange || hasDim) ? Integer.MAX_VALUE : 32;
-                boolean exceeded = iDist > maxRange;
+            if (tile instanceof com.portint.block.InterfaceBlockEntity ifce) {
+                if (ifce.getLevel() != null && bt.dimension().equals(ifce.getLevel().dimension())) {
+                    double dist = Math.sqrt(bt.pos().distSqr(ifce.getBlockPos()));
+                    int iDist = (int) Math.round(dist);
+                    boolean hasRange = ifce.hasRangeCard();
+                    boolean hasDim = ifce.hasDimCard();
+                    int maxRange = (hasRange || hasDim) ? Integer.MAX_VALUE : 32;
+                    boolean exceeded = iDist > maxRange;
 
-                ChatFormatting distColor = exceeded ? ChatFormatting.RED : ChatFormatting.GREEN;
-                String rangeLabel = (hasRange || hasDim) ? "∞" : "32";
-                lines.add(Component.translatable("gui.portint.bound_distance", iDist, rangeLabel)
-                        .withStyle(distColor));
-                if (exceeded) {
-                    lines.add(Component.translatable("gui.portint.distance_exceeded")
-                            .withStyle(ChatFormatting.RED));
+                    ChatFormatting distColor = exceeded ? ChatFormatting.RED : ChatFormatting.GREEN;
+                    String rangeLabel = (hasRange || hasDim) ? "∞" : "32";
+                    lines.add(Component.translatable("gui.portint.bound_distance", iDist, rangeLabel)
+                            .withStyle(distColor));
+                    if (exceeded) {
+                        lines.add(Component.translatable("gui.portint.distance_exceeded")
+                                .withStyle(ChatFormatting.RED));
+                    }
                 }
             }
         }
@@ -262,24 +343,44 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
-        if (button != 0) return super.mouseClicked(mx, my, button);
+        // Allow right-click for priority buttons
+        if (button != 0 && button != 1) return super.mouseClicked(mx, my, button);
+        if (button != 0 && !menu.tile.hasColumnConfig() && hoveredPriorityCol < 0)
+            return super.mouseClicked(mx, my, button);
 
-        // Gear button → open FilterScreen via server
-        if (hoveredGearCol >= 0) {
-            if (minecraft != null && minecraft.gameMode != null) {
-                minecraft.gameMode.handleInventoryButtonClick(
-                        menu.containerId, 20 + hoveredGearCol);
+        if (menu.tile.hasColumnConfig()) {
+            // Gear button → open FilterScreen via server
+            if (hoveredGearCol >= 0) {
+                if (minecraft != null && minecraft.gameMode != null) {
+                    minecraft.gameMode.handleInventoryButtonClick(
+                            menu.containerId, 20 + hoveredGearCol);
+                }
+                return true;
             }
-            return true;
-        }
 
-        // Direction button → toggle mode
-        if (hoveredDirCol >= 0) {
-            if (minecraft != null && minecraft.gameMode != null) {
-                minecraft.gameMode.handleInventoryButtonClick(
-                        menu.containerId, hoveredDirCol);
+            // Direction button → toggle mode
+            if (hoveredDirCol >= 0) {
+                if (minecraft != null && minecraft.gameMode != null) {
+                    minecraft.gameMode.handleInventoryButtonClick(
+                            menu.containerId, hoveredDirCol);
+                }
+                return true;
             }
-            return true;
+
+        } else {
+            // Priority icon button: left = +1, right = -1, shift = ×10
+            if (hoveredPriorityCol >= 0) {
+                if (minecraft != null && minecraft.gameMode != null) {
+                    boolean shift = net.minecraft.client.gui.screens.Screen.hasShiftDown();
+                    int delta = (button == 1) ? -1 : 1; // right-click = decrease
+                    if (shift) delta *= 10;
+                    int id = delta > 0
+                            ? (shift ? 60 + hoveredPriorityCol : 40 + hoveredPriorityCol)
+                            : (shift ? 50 + hoveredPriorityCol : 30 + hoveredPriorityCol);
+                    minecraft.gameMode.handleInventoryButtonClick(menu.containerId, id);
+                }
+                return true;
+            }
         }
 
         return super.mouseClicked(mx, my, button);

@@ -10,7 +10,6 @@ import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
-import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -22,23 +21,22 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.shapes.CollisionContext;
-import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
-public class InterfaceBlock extends BaseEntityBlock {
+public class ExternalStorageBlock extends BaseEntityBlock {
     public static final DirectionProperty FACING = BlockStateProperties.FACING;
     public static final BooleanProperty ACTIVE = BooleanProperty.create("active");
 
-    public InterfaceBlock(Properties props) {
+    public ExternalStorageBlock(Properties props) {
         super(props);
         registerDefaultState(stateDefinition.any()
                 .setValue(FACING, Direction.NORTH)
                 .setValue(ACTIVE, false));
     }
 
-    @Override protected MapCodec<? extends BaseEntityBlock> codec() {
-        return simpleCodec(InterfaceBlock::new);
+    @Override
+    protected MapCodec<? extends BaseEntityBlock> codec() {
+        return simpleCodec(ExternalStorageBlock::new);
     }
 
     @Override
@@ -61,18 +59,19 @@ public class InterfaceBlock extends BaseEntityBlock {
     @Nullable
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-        return new InterfaceBlockEntity(pos, state);
+        return new ExternalStorageBlockEntity(pos, state);
     }
 
     @Nullable
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(
             Level l, BlockState s, BlockEntityType<T> t) {
-        if (l.isClientSide)
-            return createTickerHelper(t, ModBlockEntities.INTERFACE_BLOCK_ENTITY.get(),
-                    InterfaceBlockEntity::clientTick);
-        return createTickerHelper(t, ModBlockEntities.INTERFACE_BLOCK_ENTITY.get(),
-                InterfaceBlockEntity::serverTick);
+        if (l.isClientSide) {
+            return createTickerHelper(t, ModBlockEntities.EXTERNAL_STORAGE_BLOCK_ENTITY.get(),
+                    ExternalStorageBlockEntity::clientTick);
+        }
+        return createTickerHelper(t, ModBlockEntities.EXTERNAL_STORAGE_BLOCK_ENTITY.get(),
+                ExternalStorageBlockEntity::serverTick);
     }
 
     @Override
@@ -80,7 +79,7 @@ public class InterfaceBlock extends BaseEntityBlock {
                              BlockState newState, boolean moved) {
         if (!state.is(newState.getBlock())) {
             BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof InterfaceBlockEntity tile) {
+            if (be instanceof ExternalStorageBlockEntity tile) {
                 tile.dropContents();
             }
             super.onRemove(state, level, pos, newState, moved);
@@ -96,13 +95,13 @@ public class InterfaceBlock extends BaseEntityBlock {
         if (level.isClientSide) return ItemInteractionResult.SUCCESS;
 
         BlockEntity be = level.getBlockEntity(pos);
-        if (!(be instanceof InterfaceBlockEntity tile))
+        if (!(be instanceof ExternalStorageBlockEntity tile))
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
 
-        // Place binding card into first empty binding slot
+        // Binding card → insert into binding inventory
         if (stack.is(ModItems.BINDING_CARD.get())) {
             var inv = tile.getBindingInventory();
-            for (int i = 0; i < 9; i++) {
+            for (int i = 0; i < ExternalStorageBlockEntity.BINDING_COUNT; i++) {
                 if (inv.getItem(i).isEmpty()) {
                     ItemStack c = stack.copy();
                     c.setCount(1);
@@ -112,15 +111,21 @@ public class InterfaceBlock extends BaseEntityBlock {
                     return ItemInteractionResult.CONSUME;
                 }
             }
-            // Binding slots full → open menu to manage existing bindings
-            tile.openCustomMenu(player);
-            return ItemInteractionResult.CONSUME;
+            return ItemInteractionResult.FAIL;
         }
 
-        // Place upgrade cards (both types accepted in both slots)
+        // Range / dimension cards → rejected (only capacity cards allowed in upgrade slots)
         if (stack.is(ModItems.RANGE_CARD.get()) || stack.is(ModItems.DIMENSION_CARD.get())) {
+            player.displayClientMessage(
+                    net.minecraft.network.chat.Component.translatable("gui.portint.only_capacity_card"),
+                    true);
+            return ItemInteractionResult.FAIL;
+        }
+
+        // Capacity card → insert into upgrade inventory
+        if (stack.is(ModItems.CAPACITY_CARD.get())) {
             var inv = tile.getUpgradeInventory();
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < ExternalStorageBlockEntity.UPGRADE_COUNT; i++) {
                 if (inv.getItem(i).isEmpty()) {
                     ItemStack c = stack.copy();
                     c.setCount(1);
@@ -133,21 +138,7 @@ public class InterfaceBlock extends BaseEntityBlock {
             return ItemInteractionResult.FAIL;
         }
 
-        // Place long card into upgrade slot 1 only (slot 0 is for acceleration cards)
-        if (stack.is(ModItems.LONG_CARD.get())) {
-            var inv = tile.getUpgradeInventory();
-            if (inv.getItem(1).isEmpty()) {
-                ItemStack c = stack.copy();
-                c.setCount(1);
-                inv.setItem(1, c);
-                stack.shrink(1);
-                tile.setChanged();
-                return ItemInteractionResult.CONSUME;
-            }
-            return ItemInteractionResult.FAIL;
-        }
-
-        // For any other item in hand, open the custom portint menu
+        // Other items → open menu
         tile.openCustomMenu(player);
         return ItemInteractionResult.CONSUME;
     }
@@ -159,7 +150,7 @@ public class InterfaceBlock extends BaseEntityBlock {
         if (level.isClientSide) return InteractionResult.SUCCESS;
 
         BlockEntity be = level.getBlockEntity(pos);
-        if (be instanceof InterfaceBlockEntity tile) {
+        if (be instanceof ExternalStorageBlockEntity tile) {
             tile.openCustomMenu(player);
             return InteractionResult.SUCCESS;
         }

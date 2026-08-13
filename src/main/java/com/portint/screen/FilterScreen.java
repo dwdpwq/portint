@@ -5,15 +5,19 @@ import appeng.client.gui.Icon;
 import mezz.jei.api.gui.handlers.IGhostIngredientHandler;
 import mezz.jei.api.ingredients.ITypedIngredient;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.renderer.Rect2i;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -158,7 +162,7 @@ public class FilterScreen extends AbstractContainerScreen<FilterMenu> implements
                     int slotIdx = row * 9 + col;
                     Slot slot = menu.slots.get(slotIdx);
                     if (slot.hasItem()) {
-                        g.fill(sx, sy, sx + 16, sy + 16, 0x33FFD700);
+                        g.fill(sx, sy, sx + 16, sy + 16, 0x33DAFFFF);
                     }
                 }
             }
@@ -195,6 +199,20 @@ public class FilterScreen extends AbstractContainerScreen<FilterMenu> implements
                         pose.translate(0, 0, 300);
                         renderChemicalIcon(g, tag, sx, sy);
                         pose.popPose();
+                    } else if (tag.contains("portint_fluid_id")) {
+                        // Convert legacy placeholder to LIGHT on the fly
+                        if (stack.getItem() != net.minecraft.world.item.Items.LIGHT) {
+                            ItemStack fixed = new ItemStack(net.minecraft.world.item.Items.LIGHT);
+                            fixed.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA, custom);
+                            slot.setByPlayer(fixed);
+                        }
+                        int sx = leftPos + slot.x;
+                        int sy = topPos + slot.y;
+                        var pose = g.pose();
+                        pose.pushPose();
+                        pose.translate(0, 0, 300);
+                        renderFluidIcon(g, tag, sx, sy);
+                        pose.popPose();
                     }
                 }
             }
@@ -207,7 +225,7 @@ public class FilterScreen extends AbstractContainerScreen<FilterMenu> implements
                 Slot hs = this.hoveredSlot;
                 ItemStack stack = hs.getItem();
                 g.fill(leftPos + hs.x, topPos + hs.y,
-                        leftPos + hs.x + 16, topPos + hs.y + 16, 0x33FFD700);
+                        leftPos + hs.x + 16, topPos + hs.y + 16, 0x33DAFFFF);
 
                 List<Component> analysis = buildGhostTooltip(stack);
                 if (!analysis.isEmpty()) {
@@ -223,7 +241,7 @@ public class FilterScreen extends AbstractContainerScreen<FilterMenu> implements
             if (idx >= FilterMenu.PLAYER_START) {
                 Slot hs = this.hoveredSlot;
                 g.fill(leftPos + hs.x, topPos + hs.y,
-                        leftPos + hs.x + 16, topPos + hs.y + 16, 0x33FFD700);
+                        leftPos + hs.x + 16, topPos + hs.y + 16, 0x33DAFFFF);
             }
         }
         if (hoveredCloseBtn) {
@@ -244,9 +262,12 @@ public class FilterScreen extends AbstractContainerScreen<FilterMenu> implements
     protected void renderSlot(GuiGraphics g, Slot slot) {
         if (slot.hasItem()) {
             var custom = slot.getItem().get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
-            if (custom != null && custom.copyTag().contains("portint_chem_id")) {
-                // Skip rendering for chemical ghost slots — icons drawn in render()
-                return;
+            if (custom != null) {
+                var tag = custom.copyTag();
+                if (tag.contains("portint_chem_id") || tag.contains("portint_fluid_id")) {
+                    // Skip rendering for chemical/fluid ghost slots — icons drawn in render()
+                    return;
+                }
             }
         }
         super.renderSlot(g, slot);
@@ -337,47 +358,115 @@ public class FilterScreen extends AbstractContainerScreen<FilterMenu> implements
         }
     }
 
+    /**
+     * Render a fluid's still-texture icon (tinted) for fluid ghost slots.
+     * Falls back to a colored rectangle if the sprite is unavailable.
+     */
+    private void renderFluidIcon(GuiGraphics g, net.minecraft.nbt.CompoundTag tag, int x, int y) {
+        String fluidId = tag.getString("portint_fluid_id");
+        if (fluidId.isEmpty()) return;
+
+        try {
+            var rl = ResourceLocation.parse(fluidId);
+            var fluid = BuiltInRegistries.FLUID.get(rl);
+            if (fluid == null) return;
+
+            var fluidType = fluid.getFluidType();
+            int color = IClientFluidTypeExtensions.of(fluidType).getTintColor();
+            int alphaColor = 0xFF000000 | (color & 0x00FFFFFF);
+
+            // Get still texture sprite
+            var stillTexture = IClientFluidTypeExtensions.of(fluidType).getStillTexture();
+            if (stillTexture != null) {
+                var sprite = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(stillTexture);
+                float r = ((color >> 16) & 0xFF) / 255f;
+                float gr = ((color >> 8) & 0xFF) / 255f;
+                float b = (color & 0xFF) / 255f;
+                float a = 1.0f;
+                com.mojang.blaze3d.systems.RenderSystem.setShaderColor(r, gr, b, a);
+                g.blit(x, y, 0, 16, 16, sprite);
+                com.mojang.blaze3d.systems.RenderSystem.setShaderColor(1, 1, 1, 1);
+            } else {
+                g.fill(x, y, x + 16, y + 16, alphaColor);
+            }
+        } catch (Exception e) {
+            com.portint.PortableInterface.LOGGER.warn(
+                "Fluid icon render failed for {}: {}", fluidId, e.toString());
+            g.fill(x, y, x + 16, y + 16, 0xFF4444AA);
+        }
+    }
+
     private List<Component> buildGhostTooltip(ItemStack stack) {
         List<Component> lines = new ArrayList<>();
-        lines.add(Component.translatable("gui.portint.ghost_marker_item")
-                .withStyle(ChatFormatting.GOLD));
 
         // Check for chemical NBT first (fast path: read metadata from tagged tank ItemStack)
         var custom = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+        boolean isChem = false;
+        boolean isFluid = false;
         if (custom != null) {
             var tag = custom.copyTag();
             if (tag.contains("portint_chem_id")) {
+                isChem = true;
+                lines.add(Component.translatable("gui.portint.ghost_marker_item")
+                        .withStyle(ChatFormatting.GOLD));
                 String chemName = tag.getString("portint_chem_name");
                 if (!chemName.isEmpty()) {
                     lines.add(Component.translatable("gui.portint.ghost_chemical", chemName)
                             .withStyle(ChatFormatting.AQUA));
                 }
-            }
-        } else {
-            // Fallback: check for chemical tank item via item registry (backwards compat)
-            ResourceLocation rl = stack.getItem().builtInRegistryHolder().key().location();
-            boolean isChemTank = rl.getNamespace().equals("mekanism") && rl.getPath().contains("chemical_tank");
-            if (isChemTank) {
-                String chemName = readChemicalName(stack);
-                if (chemName != null) {
-                    lines.add(Component.translatable("gui.portint.ghost_chemical", chemName)
+            } else if (tag.contains("portint_fluid_id")) {
+                isFluid = true;
+                lines.add(Component.translatable("gui.portint.ghost_fluid")
+                        .withStyle(ChatFormatting.GOLD));
+                String fluidName = tag.getString("portint_fluid_name");
+                if (!fluidName.isEmpty()) {
+                    lines.add(Component.literal(fluidName)
                             .withStyle(ChatFormatting.AQUA));
                 }
             }
         }
 
-        // For chemical markers, show the registry ID instead of the placeholder item name
-        if (custom != null && custom.copyTag().contains("portint_chem_id")) {
-            String chemId = custom.copyTag().getString("portint_chem_id");
-            if (!chemId.isEmpty()) {
-                lines.add(Component.literal(chemId)
-                        .withStyle(ChatFormatting.DARK_GRAY));
+        if (!isChem && !isFluid) {
+            lines.add(Component.translatable("gui.portint.ghost_marker_item")
+                    .withStyle(ChatFormatting.GOLD));
+            // Fallback: check for chemical tank item via item registry (backwards compat)
+            if (custom != null) {
+                // already handled above
+            } else {
+                ResourceLocation rl = stack.getItem().builtInRegistryHolder().key().location();
+                boolean isChemTank = rl.getNamespace().equals("mekanism") && rl.getPath().contains("chemical_tank");
+                if (isChemTank) {
+                    String chemName = readChemicalName(stack);
+                    if (chemName != null) {
+                        lines.add(Component.translatable("gui.portint.ghost_chemical", chemName)
+                                .withStyle(ChatFormatting.AQUA));
+                    }
+                }
             }
-        } else {
-            lines.add(stack.getHoverName().copy()
-                    .withStyle(ChatFormatting.WHITE));
         }
 
+        // For chemical/fluid markers, show the registry ID instead of the placeholder item name
+        if (custom != null) {
+            var tag = custom.copyTag();
+            if (tag.contains("portint_chem_id")) {
+                String chemId = tag.getString("portint_chem_id");
+                if (!chemId.isEmpty()) {
+                    lines.add(Component.literal(chemId)
+                            .withStyle(ChatFormatting.DARK_GRAY));
+                }
+                return lines;
+            }
+            if (tag.contains("portint_fluid_id")) {
+                String fluidId = tag.getString("portint_fluid_id");
+                if (!fluidId.isEmpty()) {
+                    lines.add(Component.literal(fluidId)
+                            .withStyle(ChatFormatting.DARK_GRAY));
+                }
+                return lines;
+            }
+        }
+        lines.add(stack.getHoverName().copy()
+                .withStyle(ChatFormatting.WHITE));
         return lines;
     }
 

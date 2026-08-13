@@ -1,0 +1,16 @@
+{
+  "variants": {
+    "facing=north,active=false": { "model": "portint:block/external_storage_block" },
+    "facing=south,active=false": { "model": "portint:block/external_storage_block", "y": 180 },
+    "facing=east,active=false":  { "model": "portint:block/external_storage_block", "y": 90 },
+    "facing=west,active=false":  { "model": "portint:block/external_storage_block", "y": 270 },
+    "facing=up,active=false":    { "model": "portint:block/external_storage_block", "x": 270 },
+    "facing=down,active=false":  { "model": "portint:block/external_storage_block", "x": 90 },
+    "facing=north,active=true":  { "model": "portint:block/external_storage_block_active" },
+    "facing=south,active=true":  { "model": "portint:block/external_storage_block_active", "y": 180 },
+    "facing=east,active=true":   { "model": "portint:block/external_storage_block_active", "y": 90 },
+    "facing=west,active=true":   { "model": "portint:block/external_storage_block_active", "y": 270 },
+    "facing=up,active=true":     { "model": "portint:block/external_storage_block_active", "x": 270 },
+    "facing=down,active=true":   { "model": "portint:block/external_storage_block_active", "x": 90 }
+  }
+}

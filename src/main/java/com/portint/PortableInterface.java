@@ -86,6 +86,10 @@ public class PortableInterface {
                 ModBlockEntities.INTERFACE_BLOCK_ENTITY.get(),
                 ModBlocks.INTERFACE_BLOCK_ITEM.get()
             );
+            AEBaseBlockEntity.registerBlockEntityItem(
+                ModBlockEntities.EXTERNAL_STORAGE_BLOCK_ENTITY.get(),
+                ModBlocks.EXTERNAL_STORAGE_BLOCK_ITEM.get()
+            );
         });
 
         // Register custom grid service
@@ -112,6 +116,11 @@ public class PortableInterface {
         event.registerBlockEntity(
             AECapabilities.IN_WORLD_GRID_NODE_HOST,
             ModBlockEntities.INTERFACE_BLOCK_ENTITY.get(),
+            (be, ctx) -> be
+        );
+        event.registerBlockEntity(
+            AECapabilities.IN_WORLD_GRID_NODE_HOST,
+            ModBlockEntities.EXTERNAL_STORAGE_BLOCK_ENTITY.get(),
             (be, ctx) -> be
         );
     }

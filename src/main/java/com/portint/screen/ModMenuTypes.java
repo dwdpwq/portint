@@ -24,6 +24,20 @@ public class ModMenuTypes {
                                 var be = level.getBlockEntity(pos);
                                 if (be instanceof com.portint.block.InterfaceBlockEntity ifce)
                                     return new InterfaceMenu(windowId, inv, ifce);
+                                if (be instanceof com.portint.block.ExternalStorageBlockEntity esbe)
+                                    return new InterfaceMenu(windowId, inv, esbe);
+                                return null;
+                            }));
+
+    public static final Supplier<MenuType<ExternalStorageMenu>> EXTERNAL_STORAGE_MENU =
+            MENU_TYPES.register("external_storage_menu",
+                    () -> IMenuTypeExtension.create(
+                            (windowId, inv, data) -> {
+                                var level = inv.player.level();
+                                var pos = data.readBlockPos();
+                                var be = level.getBlockEntity(pos);
+                                if (be instanceof com.portint.block.ExternalStorageBlockEntity tile)
+                                    return new ExternalStorageMenu(windowId, inv, tile);
                                 return null;
                             }));
 

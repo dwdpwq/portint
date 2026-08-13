@@ -18,13 +18,14 @@ import appeng.api.util.AECableType;
 import appeng.blockentity.grid.AENetworkedBlockEntity;
 import appeng.helpers.InterfaceLogic;
 import appeng.helpers.InterfaceLogicHost;
-import appeng.menu.locator.MenuLocators;
 import appeng.util.ConfigInventory;
 import com.portint.BoundTarget;
 import com.portint.ModDataComponents;
 import com.portint.PortableInterface;
+import com.portint.item.BindingCardItem;
 import com.portint.item.ModItems;
 import com.portint.service.IMyCustomGridService;
+import com.portint.storage.CombinedItemHandler;
 import com.portint.storage.PortableInterfaceStorageAdapter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -40,8 +41,10 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.ChestType;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
@@ -50,7 +53,7 @@ import net.neoforged.neoforge.items.IItemHandler;
 import java.util.*;
 
 public class InterfaceBlockEntity extends AENetworkedBlockEntity
-        implements InterfaceLogicHost, IStorageProvider {
+        implements InterfaceLogicHost, IStorageProvider, com.portint.screen.IInterfaceBlockEntityAccess {
 
     // ── Grid node listener ──────────────────────────────────────────
     private static final IGridNodeListener<InterfaceBlockEntity> NODE_LISTENER =
@@ -80,11 +83,21 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     // ── Per-column modes ────────────────────────────────────────────
     private final boolean[] outputModes = new boolean[9];    // false=输入(↓), true=输出(↑)
     private final boolean[] whitelistModes = new boolean[9];  // false=黑名单, true=白名单
+    private final int[] bindingPriorities = new int[9];       // per-column storage priority
 
     // ── Tick ────────────────────────────────────────────────────────
     private int tickCounter;
     private int activeStabilityCounter;
     private static final int STABILITY_THRESHOLD = 3; // 3 check cycles = 3s stability
+
+    // ── Transfer cooldown (smart sleep) ────────────────────────────
+    /** Cooldown in ticks per column. 0 = ready to process. Exponential backoff on idle. */
+    private final int[] cooldowns = new int[9];
+    private static final int MAX_COOLDOWN = 100;
+
+    // ── Hot slot tracking per column ───────────────────────────────
+    private final int[] lastExtractSlots = new int[9];
+    private final int[] lastInsertSlots = new int[9];
 
     // ── Force-loaded chunks (for dim card) ──────────────────────────
     private final Set<Long> forcedChunks = new HashSet<>();
@@ -95,6 +108,12 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     // ── Long card energy multiplier tracking ───────────────────────
     private static final double BASE_IDLE_POWER = 9000.0;
     private static final double LONG_CARD_POWER_MULTIPLIER = 64.0;
+    /** Per-tick item transfer cap for long card to prevent tick freeze. */
+    public static final int LONG_CARD_ITEM_RATE = 16384;
+    /** Per-tick item transfer cap when no long card is installed. */
+    private static final int BASE_ITEM_RATE = 1024;
+    /** Per-tick fluid transfer cap for long card (mB). */
+    private static final int LONG_CARD_FLUID_RATE = 64000;
     private boolean hadLongCard = false;
 
     // ═════════════════════════════════════════════════════════════════
@@ -108,6 +127,27 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         // Trigger validation when binding cards change
         this.bindingInv.addListener(inv -> {
             setChanged();
+            // Sync filter mode and priority from cards to block entity arrays
+            for (int i = 0; i < BINDING_COUNT; i++) {
+                ItemStack card = bindingInv.getItem(i);
+                if (!card.isEmpty()) {
+                    boolean cardWhitelist = BindingCardItem.getFilterMode(card) == 1;
+                    // 输出模式强制白名单，不受卡片过滤模式覆盖
+                    if (outputModes[i]) {
+                        if (!whitelistModes[i]) whitelistModes[i] = true;
+                    } else if (cardWhitelist != whitelistModes[i]) {
+                        whitelistModes[i] = cardWhitelist;
+                    }
+                    int cardPriority = BindingCardItem.getPriority(card);
+                    if (cardPriority != bindingPriorities[i]) {
+                        bindingPriorities[i] = cardPriority;
+                    }
+                } else {
+                    if (bindingPriorities[i] != 0) {
+                        bindingPriorities[i] = 0;
+                    }
+                }
+            }
             if (level instanceof ServerLevel) {
                 validateBindings();
             }
@@ -149,6 +189,12 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         return null;
     }
 
+    /**
+     * Re-create the grid node when the chunk is loaded.
+     * AE2's AENetworkedBlockEntity relies on clearRemoved → scheduleInit → onReady,
+     * but chunk reloads from disk may not always fire clearRemoved in all MC versions.
+     * Explicit create() here is idempotent and ensures the cable link is always restored.
+     */
     // ═════════════════════════════════════════════════════════════════
     //  IStorageProvider
     // ═════════════════════════════════════════════════════════════════
@@ -190,8 +236,28 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     public Container getUpgradeInventory() { return upgradeInv; }
     public Container getBindingInventory()  { return bindingInv; }
     public Container getMarkerInventory()   { return markerInv; }
+    public net.minecraft.world.inventory.ContainerData getDataAccess()    { return dataAccess; }
     public boolean[] getOutputModes()       { return outputModes; }
     public boolean[] getWhitelistModes()    { return whitelistModes; }
+    public boolean isOutputMode(int col)    { return col >= 0 && col < 9 && outputModes[col]; }
+    public boolean isWhitelist(int col)     { return col >= 0 && col < 9 && whitelistModes[col]; }
+    public boolean hasColumnConfig()        { return true; }
+
+    @Override
+    public int getSlotPriority(int slot) {
+        return slot >= 0 && slot < BINDING_COUNT ? bindingPriorities[slot] : 0;
+    }
+
+    @Override
+    public void adjustSlotPriority(int slot, int delta) {
+        if (slot < 0 || slot >= BINDING_COUNT) return;
+        bindingPriorities[slot] += delta;
+        ItemStack card = bindingInv.getItem(slot);
+        if (!card.isEmpty()) {
+            card.set(ModDataComponents.PRIORITY.get(), bindingPriorities[slot]);
+        }
+        setChanged();
+    }
 
     public boolean hasRangeCard() {
         return upgradeInv.getItem(0).is(ModItems.RANGE_CARD.get())
@@ -205,15 +271,31 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         return upgradeInv.getItem(0).is(ModItems.LONG_CARD.get())
             || upgradeInv.getItem(1).is(ModItems.LONG_CARD.get());
     }
+    /** Count long cards in upgrade slots (0, 1, or 2). */
+    public int countLongCards() {
+        int count = 0;
+        if (upgradeInv.getItem(0).is(ModItems.LONG_CARD.get())) count++;
+        if (upgradeInv.getItem(1).is(ModItems.LONG_CARD.get())) count++;
+        return count;
+    }
     public int getEffectiveTransferRate() {
-        return hasLongCard() ? Integer.MAX_VALUE : 64;
+        int cards = countLongCards();
+        return cards > 0 ? LONG_CARD_ITEM_RATE * cards : BASE_ITEM_RATE;
     }
 
     public void toggleOutputMode(int col) {
         if (col >= 0 && col < 9) {
             outputModes[col] = !outputModes[col];
             // 输出到绑定方块模式强制白名单
-            if (outputModes[col]) whitelistModes[col] = true;
+            if (outputModes[col]) {
+                whitelistModes[col] = true;
+            } else {
+                // 切回输入模式时，恢复卡片上的过滤模式
+                ItemStack card = bindingInv.getItem(col);
+                if (!card.isEmpty()) {
+                    whitelistModes[col] = BindingCardItem.getFilterMode(card) == 1;
+                }
+            }
             setChanged();
         }
     }
@@ -222,6 +304,12 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         // 输出模式下白名单锁定为true，不允许切黑名单
         if (col >= 0 && col < 9 && !outputModes[col]) {
             whitelistModes[col] = !whitelistModes[col];
+            // Write back to card so the card carries its filter mode
+            ItemStack card = bindingInv.getItem(col);
+            if (!card.isEmpty()) {
+                card.set(ModDataComponents.FILTER_MODE.get(),
+                    whitelistModes[col] ? (byte) 1 : (byte) 0);
+            }
             setChanged();
         }
     }
@@ -233,17 +321,13 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     public final net.minecraft.world.inventory.ContainerData dataAccess =
             new net.minecraft.world.inventory.ContainerData() {
                 @Override public int get(int i) {
-                    return switch (i) {
-                        case 0 -> packBooleans(outputModes);
-                        case 1 -> packBooleans(whitelistModes);
-                        default -> 0;
-                    };
+                    if (i == 0) return packBooleans(outputModes);
+                    if (i == 1) return packBooleans(whitelistModes);
+                    return 0;
                 }
                 @Override public void set(int i, int v) {
-                    switch (i) {
-                        case 0 -> unpackBooleans(outputModes, v);
-                        case 1 -> unpackBooleans(whitelistModes, v);
-                    }
+                    if (i == 0) unpackBooleans(outputModes, v);
+                    else if (i == 1) unpackBooleans(whitelistModes, v);
                 }
                 @Override public int getCount() { return 2; }
             };
@@ -314,14 +398,6 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             }
             setChanged();
         }
-    }
-
-    /**
-     * Open AE2's native InterfaceMenu for the config/storage/upgrade slots.
-     */
-    public void openAe2Menu(Player player) {
-        validateBindings();
-        InterfaceLogicHost.super.openMenu(player, MenuLocators.forBlockEntity(this));
     }
 
     /**
@@ -413,9 +489,24 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             }
         }
 
-        // Active transfer: process all 9 columns every tick
-        for (int col = 0; col < 9; col++) {
-            tile.processTransfer(col);
+        // Active transfer: process all 9 columns sorted by priority (highest first), with cooldown backoff
+        Integer[] order = new Integer[9];
+        for (int i = 0; i < 9; i++) order[i] = i;
+        java.util.Arrays.sort(order,
+                java.util.Comparator.comparingInt((Integer c) -> tile.bindingPriorities[c]).reversed());
+        for (int idx = 0; idx < 9; idx++) {
+            int col = order[idx];
+            if (tile.cooldowns[col] > 0) {
+                tile.cooldowns[col]--;
+                continue;
+            }
+            boolean moved = tile.processTransfer(col);
+            if (!moved) {
+                // No items moved — exponential backoff（最小值 1 tick 确保有机会恢复）
+                tile.cooldowns[col] = Math.min(tile.MAX_COOLDOWN, Math.max(1, tile.cooldowns[col] * 2 + 1));
+            } else {
+                tile.cooldowns[col] = 0;
+            }
         }
 
         // Binding auto-update: check one column every 20 ticks (rotating)
@@ -435,145 +526,227 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
 
     // ── Active transfer ─────────────────────────────────────────────
 
-    private void processTransfer(int col) {
-        if (!getMainNode().isActive()) return;
+    /** @return true if any item, fluid or chemical was transferred */
+    private boolean processTransfer(int col) {
+        if (!getMainNode().isActive()) return false;
         ItemStack card = bindingInv.getItem(col);
-        if (card.isEmpty()) return;
+        if (card.isEmpty()) return false;
         var opt = card.get(ModDataComponents.BOUND_TARGET.get());
-        if (opt == null || opt.isEmpty()) return;
+        if (opt == null || opt.isEmpty()) return false;
         BoundTarget bt = opt.get();
-        if (!(level instanceof ServerLevel serverLevel)) return;
+        if (!(level instanceof ServerLevel serverLevel)) return false;
 
         ServerLevel targetLevel = serverLevel.getServer().getLevel(bt.dimension());
-        if (targetLevel == null || !targetLevel.isLoaded(bt.pos())) return;
+        if (targetLevel == null || !targetLevel.isLoaded(bt.pos())) return false;
 
         boolean dimCard = hasDimCard();
         boolean rangeCard = hasRangeCard();
         if (!dimCard && !rangeCard) {
-            if (Math.sqrt(bt.pos().distSqr(worldPosition)) > 32) return;
+            if (Math.sqrt(bt.pos().distSqr(worldPosition)) > 32) return false;
         }
 
         IItemHandler handler = targetLevel.getCapability(
                 Capabilities.ItemHandler.BLOCK, bt.pos(), bt.side());
-        if (handler == null) return;
+        if (handler == null) return false;
+        // 大箱子合并：绑定单一半箱时，合并整个大箱子（54 格）
+        handler = mergeDoubleChest(targetLevel, bt.pos(), bt.side(), handler);
 
         boolean isOutput = outputModes[col];
         boolean isWhitelist = whitelistModes[col];
         Set<AEItemKey> markers = collectMarkerKeys(col);
 
         var grid = getMainNode().getGrid();
-        if (grid == null) return;
+        if (grid == null) return false;
         var netStorage = grid.getStorageService().getInventory();
 
+        boolean moved = false;
+
         if (isOutput) {
-            doOutput(netStorage, handler, markers, isWhitelist);
+            moved = doOutput(netStorage, handler, markers, isWhitelist, col);
         } else {
-            doInput(netStorage, handler, markers, isWhitelist);
+            moved = doInput(netStorage, handler, markers, isWhitelist, col);
         }
 
-        // Fluid handling
+        // Fluid handling (with fluid-specific markers from ghost slots)
         IFluidHandler fluidHandler = targetLevel.getCapability(
                 net.neoforged.neoforge.capabilities.Capabilities.FluidHandler.BLOCK, bt.pos(), bt.side());
         if (fluidHandler != null) {
+            Set<AEFluidKey> fluidMarkers = collectFluidMarkerKeys(col);
             if (isOutput) {
-                doOutputFluid(netStorage, fluidHandler, markers, isWhitelist);
+                moved |= doOutputFluid(netStorage, fluidHandler, fluidMarkers, isWhitelist);
             } else {
-                doInputFluid(netStorage, fluidHandler, markers, isWhitelist);
+                moved |= doInputFluid(netStorage, fluidHandler, fluidMarkers, isWhitelist);
             }
         }
 
         // Chemical (Mekanism gas/slurry/etc) handling
-        transferChemicals(netStorage, targetLevel, bt, isOutput, col, markers, isWhitelist);
+        moved |= transferChemicals(netStorage, targetLevel, bt, isOutput, col, markers, isWhitelist);
+
+        return moved;
     }
 
-    private void doInput(appeng.api.storage.MEStorage netStorage, IItemHandler handler,
-                         Set<AEItemKey> markers, boolean isWhitelist) {
-        // Budget-based transfer: with long card the budget is effectively unlimited,
-        // so we keep pulling across ALL slots until the budget is exhausted.
+    /**
+     * 检测原版大箱子（ChestBlock 的 LEFT/RIGHT），若当前 handler 未合并（不足 54 格），
+     * 则找到配对箱子构建复合 handler 覆盖整个大箱子；已合并则原样返回。
+     */
+    private IItemHandler mergeDoubleChest(ServerLevel level, BlockPos pos, Direction side, IItemHandler handler) {
+        BlockState state = level.getBlockState(pos);
+        if (!(state.getBlock() instanceof ChestBlock)) return handler;
+        ChestType type = state.getValue(ChestBlock.TYPE);
+        if (type == ChestType.SINGLE) return handler;
+        ChestType target = type == ChestType.LEFT ? ChestType.RIGHT : ChestType.LEFT;
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            BlockPos p = pos.relative(dir);
+            BlockState ps = level.getBlockState(p);
+            if (ps.getBlock() instanceof ChestBlock && ps.getValue(ChestBlock.TYPE) == target) {
+                IItemHandler pairHandler = level.getCapability(
+                        Capabilities.ItemHandler.BLOCK, p, side);
+                if (pairHandler != null && handler.getSlots() < 54) {
+                    return new CombinedItemHandler(handler, pairHandler);
+                }
+                break;
+            }
+        }
+        return handler;
+    }
+
+    private boolean doInput(appeng.api.storage.MEStorage netStorage, IItemHandler handler,
+                         Set<AEItemKey> markers, boolean isWhitelist, int col) {
         long budget = getEffectiveTransferRate();
         long totalMoved = 0;
         var source = new appeng.me.helpers.BaseActionSource();
+        int slotCount = handler.getSlots();
+        if (slotCount == 0) return false;
 
-        for (int t = 0; t < handler.getSlots() && budget > 0; t++) {
+        // Hot slot: start from last successful extract slot, wraparound
+        int start = lastExtractSlots[col] % slotCount;
+
+        for (int i = 0; i < slotCount && budget > 0; i++) {
+            int t = (start + i) % slotCount;
             ItemStack stack = handler.getStackInSlot(t);
             if (stack.isEmpty()) continue;
             if (!passesFilter(stack, markers, isWhitelist)) continue;
 
             AEItemKey key = AEItemKey.of(stack);
             int toExtract = (int) Math.min(budget, stack.getCount());
-            ItemStack pulled = handler.extractItem(t, toExtract, false);
-            if (pulled.isEmpty()) continue;
+            // 部分容器（如 Functional Storage 抽屉）单次 extractItem 会钳制到
+            // maxStackSize，导致每 tick 只抽 64；此处循环累加至 toExtract 吃满预算
+            int extracted = 0;
+            while (extracted < toExtract) {
+                ItemStack pulled = handler.extractItem(t, toExtract - extracted, false);
+                if (pulled.isEmpty()) break;
+                int got = pulled.getCount();
+                if (got <= 0) break;
+                extracted += got;
+            }
+            if (extracted == 0) continue;
 
-            long inserted = netStorage.insert(key, pulled.getCount(),
+            long inserted = netStorage.insert(key, extracted,
                     Actionable.MODULATE, source);
-            if (inserted < pulled.getCount()) {
-                // Network full for this type — return leftover and stop
-                ItemStack leftover = key.toStack((int)(pulled.getCount() - inserted));
-                for (int t2 = 0; t2 < handler.getSlots() && !leftover.isEmpty(); t2++)
+            if (inserted < extracted) {
+                // Network full for this type — return leftover to closest valid slot
+                ItemStack leftover = key.toStack((int)(extracted - inserted));
+                for (int i2 = 0; i2 < slotCount && !leftover.isEmpty(); i2++) {
+                    int t2 = (t + i2) % slotCount;
                     leftover = handler.insertItem(t2, leftover, false);
+                }
                 totalMoved += inserted;
+                lastExtractSlots[col] = t;
                 break;
             }
             budget -= inserted;
             totalMoved += inserted;
+            lastExtractSlots[col] = t;
         }
         if (totalMoved > 0) setChanged();
+        return totalMoved > 0;
     }
 
-    private void doOutput(appeng.api.storage.MEStorage netStorage, IItemHandler handler,
-                          Set<AEItemKey> markers, boolean isWhitelist) {
+    private boolean doOutput(appeng.api.storage.MEStorage netStorage, IItemHandler handler,
+                          Set<AEItemKey> markers, boolean isWhitelist, int col) {
         long budget = getEffectiveTransferRate();
         long totalMoved = 0;
         var source = new appeng.me.helpers.BaseActionSource();
-        var available = netStorage.getAvailableStacks();
+        int slotCount = handler.getSlots();
 
+        // InventoryCounts 预计算：一次性遍历 handler 建 ItemKey → 存量映射，
+        // 供 Count 约束 O(1) 取存量，避免后续重复 getStackInSlot 计数。
+        // Simulate-then-Commit：同时判断目标容器是否完全满，满则跳过整列。
+        java.util.Map<AEItemKey, Long> invCounts = new java.util.HashMap<>();
+        boolean anySpace = false;
+        for (int t = 0; t < slotCount; t++) {
+            ItemStack s = handler.getStackInSlot(t);
+            if (!s.isEmpty()) {
+                invCounts.merge(AEItemKey.of(s), (long) s.getCount(), Long::sum);
+            }
+            if (s.getCount() < handler.getSlotLimit(t)) anySpace = true;
+        }
+        if (!anySpace) return false;
+
+        var available = netStorage.getAvailableStacks();
         for (var entry : available) {
             if (budget <= 0) break;
             if (!(entry.getKey() instanceof AEItemKey itemKey)) continue;
             if (!passesAeFilter(itemKey, markers, isWhitelist)) continue;
 
             long toExtract = Math.min(budget, entry.getLongValue());
+
             long extracted = netStorage.extract(itemKey, toExtract,
                     Actionable.MODULATE, source);
             if (extracted <= 0) continue;
 
-            // Push extracted items into target handler, one stack at a time
+            // Hot slot: start insertion from last successful insert slot
+            ItemStack reference = itemKey.toStack(1);
             long remaining = extracted;
-            while (remaining > 0 && budget > 0) {
-                int batch = (int) Math.min(remaining, itemKey.toStack(1).getMaxStackSize());
-                ItemStack toPush = itemKey.toStack(batch);
-                ItemStack leftover = toPush;
-                for (int t = 0; t < handler.getSlots() && !leftover.isEmpty(); t++)
-                    leftover = handler.insertItem(t, leftover, false);
-
-                int pushed = batch - leftover.getCount();
-                if (pushed == 0) {
-                    // Target full for this item — refund rest to network
-                    netStorage.insert(itemKey, remaining,
-                            Actionable.MODULATE, source);
-                    break;
+            int start = lastInsertSlots[col] % slotCount;
+            for (int i = 0; i < slotCount && remaining > 0 && budget > 0; i++) {
+                int t = (start + i) % slotCount;
+                ItemStack existing = handler.getStackInSlot(t);
+                int slotLimit = handler.getSlotLimit(t);
+                if (!existing.isEmpty()) {
+                    if (!ItemStack.isSameItemSameComponents(existing, reference)) continue;
+                    if (existing.getCount() >= slotLimit) continue;
                 }
-                budget -= pushed;
-                totalMoved += pushed;
-                remaining -= pushed;
+                int space = slotLimit - (existing.isEmpty() ? 0 : existing.getCount());
+                if (space <= 0) continue;
+                int toInsert = (int) Math.min(remaining, space);
+                ItemStack toPush = itemKey.toStack(toInsert);
+                ItemStack leftover = handler.insertItem(t, toPush, false);
+                long pushed = toInsert - leftover.getCount();
+                if (pushed > 0) {
+                    budget -= pushed;
+                    totalMoved += pushed;
+                    remaining -= pushed;
+                    lastInsertSlots[col] = t;
+                    invCounts.merge(itemKey, pushed, Long::sum);  // 同步更新预计算存量
+                }
+            }
+            if (remaining > 0) {
+                // Target full for this item — refund rest to network
+                netStorage.insert(itemKey, remaining, Actionable.MODULATE, source);
             }
         }
         if (totalMoved > 0) setChanged();
+        return totalMoved > 0;
     }
 
     // ── Fluid transfer ──────────────────────────────────────────────
 
-    private void doInputFluid(appeng.api.storage.MEStorage netStorage, IFluidHandler handler,
-                               Set<AEItemKey> markers, boolean isWhitelist) {
-        long budget = getEffectiveTransferRate();
+    private boolean doInputFluid(appeng.api.storage.MEStorage netStorage, IFluidHandler handler,
+                               Set<AEFluidKey> markers, boolean isWhitelist) {
+        long budget = Integer.MAX_VALUE;
         long totalMoved = 0;
         var source = new appeng.me.helpers.BaseActionSource();
+        int tankCount = handler.getTanks();
+        if (tankCount == 0) return false;
 
-        for (int t = 0; t < handler.getTanks() && budget > 0; t++) {
+        for (int i = 0; i < tankCount && budget > 0; i++) {
+            int t = i;
             FluidStack stack = handler.getFluidInTank(t);
             if (stack.isEmpty()) continue;
             AEFluidKey key = AEFluidKey.of(stack.getFluid());
             if (key == null) continue;
+            if (!passesFluidFilter(key, markers, isWhitelist)) continue;
 
             long toExtract = Math.min(budget, stack.getAmount());
             FluidStack drained = handler.drain(new FluidStack(stack.getFluid(), (int) toExtract),
@@ -593,11 +766,12 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             totalMoved += inserted;
         }
         if (totalMoved > 0) setChanged();
+        return totalMoved > 0;
     }
 
-    private void doOutputFluid(appeng.api.storage.MEStorage netStorage, IFluidHandler handler,
-                                Set<AEItemKey> markers, boolean isWhitelist) {
-        long budget = getEffectiveTransferRate();
+    private boolean doOutputFluid(appeng.api.storage.MEStorage netStorage, IFluidHandler handler,
+                                Set<AEFluidKey> markers, boolean isWhitelist) {
+        long budget = Integer.MAX_VALUE;
         long totalMoved = 0;
         var source = new appeng.me.helpers.BaseActionSource();
         var available = netStorage.getAvailableStacks();
@@ -605,6 +779,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         for (var entry : available) {
             if (budget <= 0) break;
             if (!(entry.getKey() instanceof AEFluidKey fluidKey)) continue;
+            if (!passesFluidFilter(fluidKey, markers, isWhitelist)) continue;
 
             long toExtract = Math.min(budget, entry.getLongValue());
             long extracted = netStorage.extract(fluidKey, toExtract,
@@ -624,6 +799,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             if (filled > 0) setChanged();
         }
         if (totalMoved > 0) setChanged();
+        return totalMoved > 0;
     }
 
     /** ResourceLocations of Mekanism chemical tank items (all tiers). */
@@ -634,8 +810,10 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("mekanism", "ultimate_chemical_tank")
     );
 
-    private void transferChemicals(appeng.api.storage.MEStorage netStorage, ServerLevel targetLevel,
+    /** @return true if any chemical was transferred */
+    private boolean transferChemicals(appeng.api.storage.MEStorage netStorage, ServerLevel targetLevel,
                                      BoundTarget bt, boolean isOutput, int col, Set<AEItemKey> markers, boolean isWhitelist) {
+        boolean moved = false;
         try {
             // Collect chemical markers from ghost slots
             Set<Object> chemMarkers = collectChemicalMarkers(col);
@@ -651,7 +829,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             @SuppressWarnings("unchecked")
             var chemBlockCap = (net.neoforged.neoforge.capabilities.BlockCapability<?, net.minecraft.core.Direction>) blockCap;
             var handler = targetLevel.getCapability(chemBlockCap, bt.pos(), bt.side());
-            if (handler == null) return;
+            if (handler == null) return false;
 
             // Item chemical handler (for tank items)
             var itemMethod = chemMultiCap.getClass().getMethod("item");
@@ -710,7 +888,9 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         if (chemObj == null) continue;
                         availableAmount = entry.getLongValue();
                         // Check chemical filter (use Holder for proper equals)
-                        if (!chemMarkers.isEmpty()) {
+                        if (chemMarkers.isEmpty()) {
+                            if (isWhitelist) continue;
+                        } else {
                             var chemHolder = getChemicalHolderMethod.invoke(storedStack);
                             boolean chemFound = chemMarkers.contains(chemHolder);
                             if (isWhitelist ? !chemFound : chemFound) continue;
@@ -721,7 +901,9 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         if (chemObj == null) continue;
                         availableAmount = entry.getLongValue();
                         // Check chemical filter (use Holder for proper equals)
-                        if (!chemMarkers.isEmpty()) {
+                        if (chemMarkers.isEmpty()) {
+                            if (isWhitelist) continue;
+                        } else {
                             var chemHolder = getAsHolderFromChemical(chemObj);
                             boolean chemFound = chemMarkers.contains(chemHolder);
                             if (isWhitelist ? !chemFound : chemFound) continue;
@@ -758,7 +940,12 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         chemObj = getChemicalMethod.invoke(tankChem);
 
                         // Check chemical filter (use Holder for proper equals)
-                        if (!chemMarkers.isEmpty()) {
+                        if (chemMarkers.isEmpty()) {
+                            if (isWhitelist) {
+                                netStorage.insert(storageKey, 1, Actionable.MODULATE, source);
+                                continue;
+                            }
+                        } else {
                             var chemHolder = getChemicalHolderMethod.invoke(tankChem);
                             boolean chemFound = chemMarkers.contains(chemHolder);
                             if (isWhitelist ? !chemFound : chemFound) {
@@ -807,7 +994,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                             inserted += (currentAmt - leftoverAmt);
                             toInsert = leftover;
                         }
-                        if (inserted > 0) setChanged();
+                        if (inserted > 0) { setChanged(); moved = true; }
 
                         // Refund any uninserted chemical as filled tank items
                         if (inserted < totalDrained) {
@@ -836,8 +1023,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                     }
                     if (totalRemainingCapacity <= 0) continue; // all tanks full — skip
 
-                    long toExtract = Math.min(getEffectiveTransferRate(),
-                            Math.min(availableAmount, totalRemainingCapacity));
+                    long toExtract = Math.min(availableAmount, totalRemainingCapacity);
                     long extracted = netStorage.extract(storageKey, toExtract,
                             Actionable.MODULATE, source);
                     if (extracted <= 0) continue;
@@ -857,7 +1043,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         toInsert = leftover;
                     }
 
-                    if (totalInserted > 0) setChanged();
+                    if (totalInserted > 0) { setChanged(); moved = true; }
                     if (totalInserted < extracted) {
                         netStorage.insert(storageKey, extracted - totalInserted,
                                 Actionable.MODULATE, source);
@@ -877,12 +1063,14 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                     // Check chemical filter (use Holder for proper equals)
                     var chemObj = getChemicalMethod.invoke(stack);
                     var chemHolder = getChemicalHolderMethod.invoke(stack);
-                    if (!chemMarkers.isEmpty()) {
+                    if (chemMarkers.isEmpty()) {
+                        if (isWhitelist) continue;
+                    } else {
                         boolean chemFound = chemMarkers.contains(chemHolder);
                         if (isWhitelist ? !chemFound : chemFound) continue;
                     }
 
-                    long toExtract = Math.min(getEffectiveTransferRate(), amount);
+                    long toExtract = amount;
                     var drained = extractChemical.invoke(handler, t, toExtract, actionExec);
 
                     boolean drainedEmpty = (boolean) emptyMethod.invoke(drained);
@@ -896,7 +1084,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         var mekKey = mekKeyOfMethod.invoke(null, drained);
                         long inserted = netStorage.insert((AEKey) mekKey, drainedAmount,
                                 Actionable.MODULATE, source);
-                        if (inserted > 0) setChanged();
+                        if (inserted > 0) { setChanged(); moved = true; }
                         if (inserted < drainedAmount) {
                             var chemRefund = getChemicalMethod.invoke(drained);
                             var refundStack = stackCtor.newInstance(chemRefund, drainedAmount - inserted);
@@ -913,7 +1101,9 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             }
         } catch (Exception e) {
             com.portint.PortableInterface.LOGGER.error("Chemical transfer failed", e);
+            return false;
         }
+        return moved;
     }
 
     /** Get IChemicalHandler from an ItemStack via Mekanism item capability (reflection). */
@@ -1052,7 +1242,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
 
     private boolean passesFilter(ItemStack stack, Set<AEItemKey> markers,
                                   boolean isWhitelist) {
-        if (markers.isEmpty()) return true;
+        if (markers.isEmpty()) return !isWhitelist;
         AEItemKey key = AEItemKey.of(stack);
         boolean found = markers.contains(key);
         return isWhitelist ? found : !found;
@@ -1060,7 +1250,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
 
     private boolean passesAeFilter(AEItemKey key, Set<AEItemKey> markers,
                                     boolean isWhitelist) {
-        if (markers.isEmpty()) return true;
+        if (markers.isEmpty()) return !isWhitelist;
         boolean found = markers.contains(key);
         return isWhitelist ? found : !found;
     }
@@ -1079,6 +1269,36 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             }
         }
         return markers;
+    }
+
+    /** Collect AEFluidKey markers from ghost slots tagged with portint_fluid_id. */
+    private Set<AEFluidKey> collectFluidMarkerKeys(int col) {
+        Set<AEFluidKey> markers = new HashSet<>();
+        for (int i = 0; i < MARKERS_PER_COL; i++) {
+            ItemStack m = markerInv.getItem(col * MARKERS_PER_COL + i);
+            if (m.isEmpty()) continue;
+            var custom = m.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+            if (custom == null) continue;
+            var tag = custom.copyTag();
+            if (tag.contains("portint_fluid_id")) {
+                String fluidId = tag.getString("portint_fluid_id");
+                if (!fluidId.isEmpty()) {
+                    var fluid = net.minecraft.core.registries.BuiltInRegistries.FLUID
+                            .get(ResourceLocation.parse(fluidId));
+                    if (fluid != null) {
+                        markers.add(AEFluidKey.of(fluid));
+                    }
+                }
+            }
+        }
+        return markers;
+    }
+
+    private boolean passesFluidFilter(AEFluidKey key, Set<AEFluidKey> markers,
+                                       boolean isWhitelist) {
+        if (markers.isEmpty()) return !isWhitelist;
+        boolean found = markers.contains(key);
+        return isWhitelist ? found : !found;
     }
 
     /** Extract the Chemical Holder from a Mekanism tank ItemStack via reflection. */
@@ -1208,6 +1428,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                 ContainerHelper.saveAllItems(new CompoundTag(), markerInv.getItems(), reg));
         tag.putByte("OutputModes", packBooleansByte(outputModes));
         tag.putByte("WhitelistModes", packBooleansByte(whitelistModes));
+        tag.putIntArray("BindingPriorities", bindingPriorities);
     }
 
     @Override
@@ -1248,6 +1469,16 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         }
         unpackBooleansByte(outputModes, tag.getByte("OutputModes"));
         unpackBooleansByte(whitelistModes, tag.getByte("WhitelistModes"));
+        // 修复历史存档：输出模式的列必须强制白名单
+        for (int i = 0; i < BINDING_COUNT; i++) {
+            if (outputModes[i]) whitelistModes[i] = true;
+        }
+        if (tag.contains("BindingPriorities")) {
+            int[] loaded = tag.getIntArray("BindingPriorities");
+            for (int i = 0; i < Math.min(loaded.length, BINDING_COUNT); i++) {
+                bindingPriorities[i] = loaded[i];
+            }
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════

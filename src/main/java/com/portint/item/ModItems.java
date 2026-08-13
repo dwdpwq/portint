@@ -22,6 +22,9 @@ public class ModItems {
     public static final DeferredItem<Item> LONG_CARD = ITEMS.register("long",
         () -> new LongCardItem(new Item.Properties().stacksTo(1)));
 
+    public static final DeferredItem<Item> CAPACITY_CARD = ITEMS.register("capacity_card",
+        () -> new CapacityCardItem(new Item.Properties().stacksTo(1)));
+
     public static void register(IEventBus bus) {
         ITEMS.register(bus);
     }

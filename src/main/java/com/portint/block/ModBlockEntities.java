@@ -17,6 +17,11 @@ public class ModBlockEntities {
             () -> BlockEntityType.Builder.of(InterfaceBlockEntity::new, ModBlocks.INTERFACE_BLOCK.get())
                 .build(null));
 
+    public static final Supplier<BlockEntityType<ExternalStorageBlockEntity>> EXTERNAL_STORAGE_BLOCK_ENTITY =
+        BLOCK_ENTITIES.register("external_storage_block_entity",
+            () -> BlockEntityType.Builder.of(ExternalStorageBlockEntity::new, ModBlocks.EXTERNAL_STORAGE_BLOCK.get())
+                .build(null));
+
     public static void register(IEventBus bus) {
         BLOCK_ENTITIES.register(bus);
     }

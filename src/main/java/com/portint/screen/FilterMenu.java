@@ -62,35 +62,39 @@ public class FilterMenu extends AbstractContainerMenu {
     public void clicked(int slotId, int button, ClickType clickType, Player player) {
         Slot slot = slotId >= 0 && slotId < this.slots.size() ? this.slots.get(slotId) : null;
 
-        // Ghost marker slots: copy 1 or clear
+        // Ghost marker slots: only handle on client to avoid double-processing
+        // (vanilla click packet and our SetGhostItemPayload both hitting server)
         if (slot instanceof GhostMarkerSlot) {
-            ItemStack carried = getCarried();
-            if (!carried.isEmpty()) {
-                slot.setByPlayer(carried.copyWithCount(1));
-            } else {
-                slot.setByPlayer(ItemStack.EMPTY);
-            }
-            // Client side: sync to server (slotId = within-column index 0-26)
             if (player.level().isClientSide) {
+                ItemStack carried = getCarried();
+                if (!carried.isEmpty()) {
+                    if (button == 1) { // Right-click: try fluid marking
+                        slot.setByPlayer(tryMarkFluid(carried));
+                    } else {
+                        slot.setByPlayer(carried.copyWithCount(1));
+                    }
+                } else {
+                    slot.setByPlayer(ItemStack.EMPTY);
+                }
                 PacketDistributor.sendToServer(new SetGhostItemPayload(column, slotId, slot.getItem()));
             }
             return;
         }
 
         // Shift-click on player inventory: mark into first empty ghost slot
-        // without consuming the original item (AE2-style ghost marking)
+        // Client-only to prevent double-marking (server gets it via SetGhostItemPayload)
         if (clickType == ClickType.QUICK_MOVE && slot != null && slot.hasItem()
                 && slotId >= PLAYER_START) {
-            ItemStack stack = slot.getItem();
-            for (int i = MARKER_START; i < MARKER_START + 27; i++) {
-                Slot gs = this.slots.get(i);
-                if (!gs.hasItem()) {
-                    ItemStack copy = stack.copyWithCount(1);
-                    gs.setByPlayer(copy);
-                    if (player.level().isClientSide) {
+            if (player.level().isClientSide) {
+                ItemStack stack = slot.getItem();
+                for (int i = MARKER_START; i < MARKER_START + 27; i++) {
+                    Slot gs = this.slots.get(i);
+                    if (!gs.hasItem()) {
+                        ItemStack copy = stack.copyWithCount(1);
+                        gs.setByPlayer(copy);
                         PacketDistributor.sendToServer(new SetGhostItemPayload(column, i, copy));
+                        break;
                     }
-                    break;
                 }
             }
             return;
@@ -191,5 +195,39 @@ public class FilterMenu extends AbstractContainerMenu {
         if (idx >= 0 && idx < markerInv.getContainerSize()) {
             markerInv.setItem(idx, payload.stack());
         }
+    }
+
+    // ── Fluid ghost marking ─────────────────────────────────────────
+
+    /** Try to extract fluid info from a carried item. Returns a ghost ItemStack
+     *  (Items.LIGHT + portint_fluid_id NBT) on success, or a 1-count copy of
+     *  the original item if no fluid container detected. */
+    private static ItemStack tryMarkFluid(ItemStack carried) {
+        // NeoForge FluidUtil: detects vanilla buckets + modded fluid containers
+        var opt = net.neoforged.neoforge.fluids.FluidUtil.getFluidContained(carried);
+        if (opt.isPresent()) {
+            var fs = opt.get();
+            var fluid = fs.getFluid();
+            if (fluid != net.minecraft.world.level.material.Fluids.EMPTY) {
+                var key = net.minecraft.core.registries.BuiltInRegistries.FLUID.getResourceKey(fluid);
+                if (key.isPresent()) {
+                    return makeFluidGhostItem(key.get().location().toString(), fluid);
+                }
+            }
+        }
+
+        // Not a fluid container → fall back to regular item marking
+        return carried.copyWithCount(1);
+    }
+
+    private static ItemStack makeFluidGhostItem(String fluidId, net.minecraft.world.level.material.Fluid fluid) {
+        ItemStack ghost = new ItemStack(net.minecraft.world.item.Items.LIGHT);
+        String fluidName = fluid.getFluidType().getDescription().getString();
+        ghost.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA,
+            net.minecraft.world.item.component.CustomData.EMPTY.update(tag -> {
+                tag.putString("portint_fluid_id", fluidId);
+                tag.putString("portint_fluid_name", fluidName);
+            }));
+        return ghost;
     }
 }

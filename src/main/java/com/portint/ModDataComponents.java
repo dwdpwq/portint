@@ -46,6 +46,23 @@ public class ModDataComponents {
                 .build()
         );
 
+    public static final Supplier<DataComponentType<Integer>> PRIORITY =
+        COMPONENTS.register("priority",
+            () -> DataComponentType.<Integer>builder()
+                .persistent(Codec.INT)
+                .networkSynchronized(ByteBufCodecs.INT)
+                .build()
+        );
+
+    /** 0 = blacklist, 1 = whitelist */
+    public static final Supplier<DataComponentType<Byte>> FILTER_MODE =
+        COMPONENTS.register("filter_mode",
+            () -> DataComponentType.<Byte>builder()
+                .persistent(Codec.BYTE)
+                .networkSynchronized(ByteBufCodecs.BYTE)
+                .build()
+        );
+
     public static void register(IEventBus bus) {
         COMPONENTS.register(bus);
     }

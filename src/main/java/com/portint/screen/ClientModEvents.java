@@ -14,5 +14,6 @@ public class ClientModEvents {
     public static void registerScreens(RegisterMenuScreensEvent event) {
         event.register(ModMenuTypes.INTERFACE_MENU.get(), InterfaceScreen::new);
         event.register(ModMenuTypes.FILTER_MENU.get(), FilterScreen::new);
+        event.register(ModMenuTypes.EXTERNAL_STORAGE_MENU.get(), ExternalStorageScreen::new);
     }
 }

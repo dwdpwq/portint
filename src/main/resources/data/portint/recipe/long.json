@@ -1,0 +1,42 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "ABC",
+    "DEF",
+    "GHI"
+  ],
+  "key": {
+    "A": {
+      "item": "minecraft:echo_shard"
+    },
+    "B": {
+      "item": "minecraft:lightning_rod"
+    },
+    "C": {
+      "item": "minecraft:dragon_head"
+    },
+    "D": {
+      "item": "portint:binding_card"
+    },
+    "E": {
+      "item": "portint:range_card"
+    },
+    "F": {
+      "item": "portint:dimension_card"
+    },
+    "G": {
+      "item": "minecraft:beacon"
+    },
+    "H": {
+      "item": "minecraft:conduit"
+    },
+    "I": {
+      "item": "minecraft:sniffer_egg"
+    }
+  },
+  "result": {
+    "count": 1,
+    "id": "portint:long"
+  }
+}

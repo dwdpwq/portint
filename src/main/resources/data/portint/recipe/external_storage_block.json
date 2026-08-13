@@ -1,0 +1,33 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "ABC",
+    "DEF",
+    "CBA"
+  ],
+  "key": {
+    "A": {
+      "item": "ae2:storage_bus"
+    },
+    "B": {
+      "item": "ae2:singularity"
+    },
+    "C": {
+      "item": "ae2:interface"
+    },
+    "D": {
+      "item": "ae2:import_bus"
+    },
+    "E": {
+      "item": "ae2:controller"
+    },
+    "F": {
+      "item": "ae2:export_bus"
+    }
+  },
+  "result": {
+    "count": 1,
+    "id": "portint:external_storage_block"
+  }
+}

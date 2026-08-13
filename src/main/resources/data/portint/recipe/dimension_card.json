@@ -1,0 +1,36 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    " A ",
+    "BCD",
+    "EFG"
+  ],
+  "key": {
+    "A": {
+      "item": "ae2:crystal_resonance_generator"
+    },
+    "B": {
+      "item": "ae2:spatial_pylon"
+    },
+    "C": {
+      "item": "portint:range_card"
+    },
+    "D": {
+      "item": "ae2:spatial_storage_cell_128"
+    },
+    "E": {
+      "item": "minecraft:sea_lantern"
+    },
+    "F": {
+      "item": "minecraft:end_crystal"
+    },
+    "G": {
+      "item": "minecraft:netherite_block"
+    }
+  },
+  "result": {
+    "count": 1,
+    "id": "portint:dimension_card"
+  }
+}
