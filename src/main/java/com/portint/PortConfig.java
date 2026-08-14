@@ -43,6 +43,16 @@ public class PortConfig {
                     "Default: 32")
             .defineInRange("wirelessRangeNoUpgrade", 32, -1, Integer.MAX_VALUE);
 
+    // ── Tick scheduling ────────────────────────────────────────────
+
+    /** Minimum tick interval between two transfer passes for the same column. Default: 6 */
+    public static final ModConfigSpec.IntValue TICK_INTERVAL = BUILDER
+            .comment("Minimum tick interval between two transfer passes for the same column.",
+                    "A higher value reduces CPU load on large inventories;",
+                    "successful transfers wait at least this many ticks before the next scan.",
+                    "Range: [1, 100]. Default: 6")
+            .defineInRange("tickInterval", 6, 1, 100);
+
     // ── Chunk loading ──────────────────────────────────────────────
 
     /** Whether the Dimension card force-loads chunks of bound blocks. Default: true */
@@ -50,6 +60,17 @@ public class PortConfig {
             .comment("Whether installing a Dimension card force-loads the chunks of bound blocks.",
                     "Default: true")
             .define("chunkLoadingEnabled", true);
+
+    /** Fuse: auto-release a force-loaded chunk after this many ticks without any transfer activity.
+     *  6000 ticks = 5 minutes. -1 = never time out (legacy behaviour). Default: 6000 */
+    public static final ModConfigSpec.IntValue CHUNK_LOAD_TIMEOUT_TICKS = BUILDER
+            .comment("Fuse: automatically release the force-loaded chunk of a bound block",
+                    "after this many ticks without any successful transfer on that column.",
+                    "Prevents 'ghost' chunkloading tickets (leaked force loads) if a binding card",
+                    "is destroyed or the server shuts down unexpectedly.",
+                    "6000 ticks = 5 minutes. -1 = never time out (legacy behaviour).",
+                    "Range: [-1, 2147483647]. Default: 6000")
+            .defineInRange("chunkLoadTimeoutTicks", 6000, -1, Integer.MAX_VALUE);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
 

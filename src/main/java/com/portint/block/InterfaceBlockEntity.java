@@ -32,6 +32,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Container;
@@ -45,6 +46,7 @@ import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
+import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.fluids.FluidStack;
 import net.neoforged.neoforge.fluids.capability.IFluidHandler;
@@ -99,8 +101,17 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     private final int[] lastExtractSlots = new int[9];
     private final int[] lastInsertSlots = new int[9];
 
-    // ── Force-loaded chunks (for dim card) ──────────────────────────
-    private final Set<Long> forcedChunks = new HashSet<>();
+    // ── Mekanism soft-dependency guard ─────────────────────────────
+    /** Whether Mekanism is installed. Checked once at class load; all chemical
+     *  transfer paths are skipped entirely when it is absent (pseudo soft-dependency). */
+    private static final boolean MEKANISM_LOADED = ModList.get().isLoaded("mekanism");
+
+    // ── Force-loaded chunks (for dim card), keyed by dimension ─────
+    private final Map<ResourceKey<Level>, Set<Long>> forcedChunks = new HashMap<>();
+
+    // ── Chunk-loading fuse: last successful transfer per column (game time) ──
+    /** Long.MIN_VALUE = no activity recorded yet (never considered timed out). */
+    private final long[] lastActivityTime = new long[9];
 
     // ── Network state tracking for model swap ──────────────────────
     private boolean wasActive = false;
@@ -120,11 +131,15 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
 
     public InterfaceBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.INTERFACE_BLOCK_ENTITY.get(), pos, state);
+        java.util.Arrays.fill(lastActivityTime, Long.MIN_VALUE);
         this.logic = new InterfaceLogic(getMainNode(), this,
                 ModBlocks.INTERFACE_BLOCK_ITEM.get());
         // Trigger validation when binding cards change
         this.bindingInv.addListener(inv -> {
             setChanged();
+            // Any binding-card change resets the chunk-loading fuse timer so a
+            // freshly bound target is never treated as "timed out" on arrival.
+            java.util.Arrays.fill(lastActivityTime, Long.MIN_VALUE);
             // Sync filter mode and priority from cards to block entity arrays
             for (int i = 0; i < BINDING_COUNT; i++) {
                 ItemStack card = bindingInv.getItem(i);
@@ -505,7 +520,11 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                 // No items moved — exponential backoff（最小值 1 tick 确保有机会恢复）
                 tile.cooldowns[col] = Math.min(tile.MAX_COOLDOWN, Math.max(1, tile.cooldowns[col] * 2 + 1));
             } else {
-                tile.cooldowns[col] = 0;
+                // Transfer succeeded — enforce the configured minimum tick interval
+                // (prevents a full inventory scan every single tick on high-load servers)
+                int interval = com.portint.PortConfig.TICK_INTERVAL.get();
+                tile.cooldowns[col] = Math.max(0, interval - 1);
+                tile.lastActivityTime[col] = tile.level.getGameTime();
             }
         }
 
@@ -584,7 +603,12 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         }
 
         // Chemical (Mekanism gas/slurry/etc) handling
-        moved |= transferChemicals(netStorage, targetLevel, bt, isOutput, col, markers, isWhitelist);
+        // Pseudo soft-dependency: when Mekanism is not installed, skip entirely
+        // so no reflection failures run on every tick and no chemical tank items
+        // are ever queried (matches README: Mekanism optional, no hard dependency).
+        if (MEKANISM_LOADED) {
+            moved |= transferChemicals(netStorage, targetLevel, bt, isOutput, col, markers, isWhitelist);
+        }
 
         return moved;
     }
@@ -775,7 +799,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
 
     private boolean doOutputFluid(appeng.api.storage.MEStorage netStorage, IFluidHandler handler,
                                 Set<AEFluidKey> markers, boolean isWhitelist) {
-        long budget = Integer.MAX_VALUE;
+        long budget = com.portint.PortConfig.getFluidBudget();
         long totalMoved = 0;
         var source = new appeng.me.helpers.BaseActionSource();
         var available = netStorage.getAvailableStacks();
@@ -1367,7 +1391,9 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         if (!(level instanceof ServerLevel serverLevel)) return;
 
         boolean dimCard = hasDimCard() && com.portint.PortConfig.CHUNK_LOADING_ENABLED.get();
-        Set<Long> neededChunks = new HashSet<>();
+        long timeout = com.portint.PortConfig.CHUNK_LOAD_TIMEOUT_TICKS.get();
+        long now = serverLevel.getGameTime();
+        Map<ResourceKey<Level>, Set<Long>> neededChunks = new HashMap<>();
 
         if (dimCard) {
             for (int col = 0; col < 9; col++) {
@@ -1376,45 +1402,67 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                     var opt = bs.get(ModDataComponents.BOUND_TARGET.get());
                     if (opt != null && opt.isPresent()) {
                         BoundTarget t = opt.get();
+                        // ── Fuse: skip columns with no transfer activity for too long ──
+                        // Prevents 'ghost' chunkloading tickets from keeping chunks loaded
+                        // forever after bindings are abandoned or servers shut down uncleanly.
+                        if (timeout > 0 && lastActivityTime[col] != Long.MIN_VALUE
+                                && now - lastActivityTime[col] > timeout) {
+                            continue;
+                        }
                         ServerLevel tl = serverLevel.getServer().getLevel(t.dimension());
                         if (tl != null) {
                             ChunkPos cp = new ChunkPos(t.pos());
-                            long key = ChunkPos.asLong(cp.x, cp.z);
-                            neededChunks.add(key);
-                            if (!forcedChunks.contains(key)) {
-                                tl.setChunkForced(cp.x, cp.z, true);
-                            }
+                            neededChunks.computeIfAbsent(t.dimension(), k -> new HashSet<>())
+                                    .add(ChunkPos.asLong(cp.x, cp.z));
                         }
                     }
                 }
             }
         }
 
-        // Release chunks that are no longer needed
-        Iterator<Long> it = forcedChunks.iterator();
+        // Release chunks that are no longer needed (unbound or timed out)
+        Iterator<Map.Entry<ResourceKey<Level>, Set<Long>>> it = forcedChunks.entrySet().iterator();
         while (it.hasNext()) {
-            long key = it.next();
-            if (!neededChunks.contains(key)) {
-                ChunkPos cp = new ChunkPos(key);
-                serverLevel.setChunkForced(cp.x, cp.z, false);
-                it.remove();
+            Map.Entry<ResourceKey<Level>, Set<Long>> e = it.next();
+            Set<Long> keep = neededChunks.get(e.getKey());
+            Iterator<Long> cit = e.getValue().iterator();
+            while (cit.hasNext()) {
+                long key = cit.next();
+                if (keep == null || !keep.contains(key)) {
+                    ServerLevel tl = serverLevel.getServer().getLevel(e.getKey());
+                    if (tl != null) {
+                        ChunkPos cp = new ChunkPos(key);
+                        tl.setChunkForced(cp.x, cp.z, false);
+                    }
+                    cit.remove();
+                }
             }
+            if (e.getValue().isEmpty()) it.remove();
         }
         // Add new needed chunks
-        for (long key : neededChunks) {
-            if (!forcedChunks.contains(key)) {
-                ChunkPos cp = new ChunkPos(key);
-                serverLevel.setChunkForced(cp.x, cp.z, true);
-                forcedChunks.add(key);
+        for (Map.Entry<ResourceKey<Level>, Set<Long>> e : neededChunks.entrySet()) {
+            ServerLevel tl = serverLevel.getServer().getLevel(e.getKey());
+            if (tl == null) continue;
+            Set<Long> cur = forcedChunks.computeIfAbsent(e.getKey(), k -> new HashSet<>());
+            for (long key : e.getValue()) {
+                if (!cur.contains(key)) {
+                    ChunkPos cp = new ChunkPos(key);
+                    tl.setChunkForced(cp.x, cp.z, true);
+                    cur.add(key);
+                }
             }
         }
     }
 
     private void releaseAllForcedChunks() {
         if (!(level instanceof ServerLevel serverLevel)) return;
-        for (long key : forcedChunks) {
-            ChunkPos cp = new ChunkPos(key);
-            serverLevel.setChunkForced(cp.x, cp.z, false);
+        for (Map.Entry<ResourceKey<Level>, Set<Long>> e : forcedChunks.entrySet()) {
+            ServerLevel tl = serverLevel.getServer().getLevel(e.getKey());
+            if (tl == null) continue;
+            for (long key : e.getValue()) {
+                ChunkPos cp = new ChunkPos(key);
+                tl.setChunkForced(cp.x, cp.z, false);
+            }
         }
         forcedChunks.clear();
     }
@@ -1511,6 +1559,15 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     public void setRemoved() {
         super.setRemoved();
         releaseAllForcedChunks();
+    }
+
+    @Override
+    public void onChunkUnloaded() {
+        // Release every force-load ticket bound by this block before the chunk
+        // itself unloads — otherwise the tickets leak and keep chunks loaded forever
+        // (ghost chunkloading, TPS/memory degradation).
+        releaseAllForcedChunks();
+        super.onChunkUnloaded();
     }
 
     // ═════════════════════════════════════════════════════════════════
