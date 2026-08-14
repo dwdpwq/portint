@@ -1,5 +1,7 @@
 # PortInt — Portable Interface
 
+CurseForge: https://www.curseforge.com/minecraft/mc-mods/portint
+
 AE2 附属模组，为 NeoForge 1.21.1 添加便携接口方块。通过绑定卡（Binding Card）无线连接远程容器，实现跨维度的物品、流体、化学品自动传输。
 
 ## 功能

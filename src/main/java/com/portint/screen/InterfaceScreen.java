@@ -286,7 +286,7 @@ public class InterfaceScreen extends AbstractContainerScreen<InterfaceMenu> {
                 lines.add(Component.translatable("gui.portint.available_upgrades").withStyle(ChatFormatting.WHITE));
                 lines.add(Component.translatable("gui.portint.upgrade_range").withStyle(ChatFormatting.GRAY));
                 lines.add(Component.translatable("gui.portint.upgrade_dimension").withStyle(ChatFormatting.GRAY));
-                lines.add(Component.translatable("gui.portint.upgrade_long", InterfaceBlockEntity.LONG_CARD_ITEM_RATE).withStyle(ChatFormatting.GRAY));
+                lines.add(Component.translatable("gui.portint.upgrade_long", InterfaceBlockEntity.longCardItemRate()).withStyle(ChatFormatting.GRAY));
                 g.renderTooltip(font, lines, Optional.empty(), mouseX, mouseY);
             }
         }

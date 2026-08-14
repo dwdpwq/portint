@@ -19,6 +19,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.ModList;
+import net.neoforged.fml.config.ModConfig;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
@@ -70,6 +71,9 @@ public class PortableInterface {
         ModDataComponents.register(modEventBus);
         ModMenuTypes.register(modEventBus);
         CREATIVE_TABS.register(modEventBus);
+
+        // Register server configuration
+        container.registerConfig(ModConfig.Type.SERVER, PortConfig.SPEC);
 
         // Register network payload handlers
         modEventBus.addListener(this::registerPayloads);

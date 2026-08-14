@@ -27,7 +27,7 @@ public class LongCardItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("item.portint.long.tooltip", InterfaceBlockEntity.LONG_CARD_ITEM_RATE).withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.translatable("item.portint.long.tooltip", InterfaceBlockEntity.longCardItemRate()).withStyle(ChatFormatting.GRAY));
         super.appendHoverText(stack, context, tooltip, flag);
     }
 }

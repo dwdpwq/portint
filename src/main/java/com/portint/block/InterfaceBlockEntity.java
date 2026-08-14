@@ -108,12 +108,10 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     // ── Long card energy multiplier tracking ───────────────────────
     private static final double BASE_IDLE_POWER = 9000.0;
     private static final double LONG_CARD_POWER_MULTIPLIER = 64.0;
-    /** Per-tick item transfer cap for long card to prevent tick freeze. */
-    public static final int LONG_CARD_ITEM_RATE = 16384;
-    /** Per-tick item transfer cap when no long card is installed. */
-    private static final int BASE_ITEM_RATE = 1024;
-    /** Per-tick fluid transfer cap for long card (mB). */
-    private static final int LONG_CARD_FLUID_RATE = 64000;
+    /** Per-tick item transfer cap per long card (items/tick), read from config. */
+    public static int longCardItemRate() {
+        return com.portint.PortConfig.LONG_CARD_ITEM_RATE.get();
+    }
     private boolean hadLongCard = false;
 
     // ═════════════════════════════════════════════════════════════════
@@ -280,7 +278,9 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     }
     public int getEffectiveTransferRate() {
         int cards = countLongCards();
-        return cards > 0 ? LONG_CARD_ITEM_RATE * cards : BASE_ITEM_RATE;
+        return cards > 0
+                ? com.portint.PortConfig.LONG_CARD_ITEM_RATE.get() * cards
+                : com.portint.PortConfig.BASE_ITEM_RATE.get();
     }
 
     public void toggleOutputMode(int col) {
@@ -542,7 +542,11 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         boolean dimCard = hasDimCard();
         boolean rangeCard = hasRangeCard();
         if (!dimCard && !rangeCard) {
-            if (Math.sqrt(bt.pos().distSqr(worldPosition)) > 32) return false;
+            int wirelessRange = com.portint.PortConfig.getEffectiveWirelessRange();
+            if (wirelessRange >= 0
+                    && Math.sqrt(bt.pos().distSqr(worldPosition)) > wirelessRange) {
+                return false;
+            }
         }
 
         IItemHandler handler = targetLevel.getCapability(
@@ -734,7 +738,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
 
     private boolean doInputFluid(appeng.api.storage.MEStorage netStorage, IFluidHandler handler,
                                Set<AEFluidKey> markers, boolean isWhitelist) {
-        long budget = Integer.MAX_VALUE;
+        long budget = com.portint.PortConfig.getFluidBudget();
         long totalMoved = 0;
         var source = new appeng.me.helpers.BaseActionSource();
         int tankCount = handler.getTanks();
@@ -814,6 +818,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     private boolean transferChemicals(appeng.api.storage.MEStorage netStorage, ServerLevel targetLevel,
                                      BoundTarget bt, boolean isOutput, int col, Set<AEItemKey> markers, boolean isWhitelist) {
         boolean moved = false;
+        long remainingBudget = com.portint.PortConfig.getFluidBudget();
         try {
             // Collect chemical markers from ghost slots
             Set<Object> chemMarkers = collectChemicalMarkers(col);
@@ -1023,7 +1028,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                     }
                     if (totalRemainingCapacity <= 0) continue; // all tanks full — skip
 
-                    long toExtract = Math.min(availableAmount, totalRemainingCapacity);
+                    long toExtract = Math.min(availableAmount, Math.min(totalRemainingCapacity, remainingBudget));
                     long extracted = netStorage.extract(storageKey, toExtract,
                             Actionable.MODULATE, source);
                     if (extracted <= 0) continue;
@@ -1048,6 +1053,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         netStorage.insert(storageKey, extracted - totalInserted,
                                 Actionable.MODULATE, source);
                     }
+                    remainingBudget -= totalInserted;
                     break;
                 }
             } else {
@@ -1070,7 +1076,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         if (isWhitelist ? !chemFound : chemFound) continue;
                     }
 
-                    long toExtract = amount;
+                    long toExtract = Math.min(amount, remainingBudget);
                     var drained = extractChemical.invoke(handler, t, toExtract, actionExec);
 
                     boolean drainedEmpty = (boolean) emptyMethod.invoke(drained);
@@ -1085,6 +1091,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         long inserted = netStorage.insert((AEKey) mekKey, drainedAmount,
                                 Actionable.MODULATE, source);
                         if (inserted > 0) { setChanged(); moved = true; }
+                        remainingBudget -= inserted;
                         if (inserted < drainedAmount) {
                             var chemRefund = getChemicalMethod.invoke(drained);
                             var refundStack = stackCtor.newInstance(chemRefund, drainedAmount - inserted);
@@ -1092,7 +1099,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         }
                     } else {
                         // Fallback: store chemical in basic_chemical_tank items
-                        storeChemicalAsTank(drained, basicTankItem,
+                        remainingBudget -= storeChemicalAsTank(drained, basicTankItem,
                                 chemStackClass, actionExec, chemItemCap,
                                 netStorage, source, handler, t);
                     }
@@ -1120,7 +1127,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     }
 
     /** Store a ChemicalStack as filled basic_chemical_tank items into ME storage. */
-    private void storeChemicalAsTank(Object drained,
+    private long storeChemicalAsTank(Object drained,
                                       net.minecraft.world.item.Item basicTankItem,
                                       Class<?> chemStackClass, Object actionExec,
                                       net.neoforged.neoforge.capabilities.ItemCapability<?, Void> chemItemCap,
@@ -1131,7 +1138,8 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         var amountMethod = chemStackClass.getMethod("getAmount");
         var getChemicalMethod = chemStackClass.getMethod("getChemical");
 
-        long remaining = (long) amountMethod.invoke(drained);
+        long original = (long) amountMethod.invoke(drained);
+        long remaining = original;
         var chemObj = getChemicalMethod.invoke(drained);
 
         // Basic tank capacity: 64,000 mB. One tank per batch.
@@ -1168,7 +1176,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             remaining -= actuallyStored;
         }
 
-        if (remaining < (long) amountMethod.invoke(drained)) {
+        if (remaining < original) {
             setChanged();
             // Refund any leftover
             if (remaining > 0 && handler != null) {
@@ -1178,6 +1186,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         .invoke(handler, tankIndex, refundStack, actionExec);
             }
         }
+        return original - remaining;
     }
 
     /** Refund chemical from a tank item back to a block handler. */
@@ -1357,7 +1366,7 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     private void syncForceLoads() {
         if (!(level instanceof ServerLevel serverLevel)) return;
 
-        boolean dimCard = hasDimCard();
+        boolean dimCard = hasDimCard() && com.portint.PortConfig.CHUNK_LOADING_ENABLED.get();
         Set<Long> neededChunks = new HashSet<>();
 
         if (dimCard) {
