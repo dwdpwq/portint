@@ -148,6 +148,22 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             // Any binding-card change resets the chunk-loading fuse timer so a
             // freshly bound target is never treated as "timed out" on arrival.
             java.util.Arrays.fill(lastActivityTime, Long.MIN_VALUE);
+            // Manual re-bind: clear reload-debounce entries for currently bound
+            // targets so a player can force an immediate reconnect during cooldown.
+            if (!chunkReloadCooldown.isEmpty()) {
+                for (int i = 0; i < BINDING_COUNT; i++) {
+                    ItemStack bc = bindingInv.getItem(i);
+                    if (!bc.isEmpty() && bc.is(ModItems.BINDING_CARD.get())) {
+                        var bo = bc.get(ModDataComponents.BOUND_TARGET.get());
+                        if (bo != null && bo.isPresent()) {
+                            BoundTarget bt2 = bo.get();
+                            ChunkPos bcp = new ChunkPos(bt2.pos());
+                            chunkReloadCooldown.remove(
+                                    bt2.dimension().location().toString() + "|" + ChunkPos.asLong(bcp.x, bcp.z));
+                        }
+                    }
+                }
+            }
             // Sync filter mode and priority from cards to block entity arrays
             for (int i = 0; i < BINDING_COUNT; i++) {
                 ItemStack card = bindingInv.getItem(i);
@@ -593,6 +609,15 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
         boolean moved = false;
 
         if (isOutput) {
+            // ── Cooldown gate (anti-thrash): refuse OUTPUT transfers while the
+            // target chunk is inside the reload-debounce window started by a
+            // timeout release. Items/fluids/chemicals stay in ME storage instead
+            // of being pulled into the interface cache against a possibly-offline
+            // target (which would look stuck / overflow). Skipped when
+            // chunkLoadTimeoutTicks <= 0 (timeout disabled → never on cooldown).
+            if (isTargetOnCooldown(bt.dimension(), bt.pos())) {
+                return false;
+            }
             moved = doOutput(netStorage, handler, markers, isWhitelist, col);
         } else {
             moved = doInput(netStorage, handler, markers, isWhitelist, col);
@@ -1397,6 +1422,23 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     // ═════════════════════════════════════════════════════════════════
     //  Force chunk loading
     // ═════════════════════════════════════════════════════════════════
+
+    /** Whether the target chunk is inside the reload-debounce window started by a
+     *  timeout release. While cooling down, OUTPUT transfers are refused so items
+     *  are never pulled out of ME storage into a potentially-offline target (which
+     *  would wedge them in the interface cache).
+     *  Returns false when chunkLoadTimeoutTicks <= 0 (timeout disabled) or when
+     *  there is no debounce record for the target (first bind / manual re-bind). */
+    private boolean isTargetOnCooldown(ResourceKey<Level> dimension, BlockPos targetPos) {
+        if (dimension == null || targetPos == null) return false;
+        long timeout = com.portint.PortConfig.CHUNK_LOAD_TIMEOUT_TICKS.get();
+        if (timeout <= 0) return false; // -1 = timeout disabled → never cool down
+        ChunkPos cp = new ChunkPos(targetPos);
+        Long end = chunkReloadCooldown.get(
+                dimension.location().toString() + "|" + ChunkPos.asLong(cp.x, cp.z));
+        if (end == null) return false; // no debounce record → never on cooldown
+        return level.getGameTime() < end;
+    }
 
     private void syncForceLoads() {
         if (!(level instanceof ServerLevel serverLevel)) return;
