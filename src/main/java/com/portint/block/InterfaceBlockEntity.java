@@ -113,6 +113,14 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     /** Long.MIN_VALUE = no activity recorded yet (never considered timed out). */
     private final long[] lastActivityTime = new long[9];
 
+    // ── Chunk reload debounce (anti thrash) ────────────────────────
+    /** Minimum gap between a timeout-release and a re-force-load of the same chunk.
+     *  Prevents the  load → unload → reload  thrash cycle every timeout window
+     *  when the machine keeps producing but the chunk gets released on timeout. */
+    private static final long CHUNK_RELOAD_COOLDOWN_TICKS = 1200; // 60s
+    /** key = "dimension|chunkKey", value = game tick until which reload is skipped. */
+    private final Map<String, Long> chunkReloadCooldown = new HashMap<>();
+
     // ── Network state tracking for model swap ──────────────────────
     private boolean wasActive = false;
 
@@ -841,6 +849,9 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
     /** @return true if any chemical was transferred */
     private boolean transferChemicals(appeng.api.storage.MEStorage netStorage, ServerLevel targetLevel,
                                      BoundTarget bt, boolean isOutput, int col, Set<AEItemKey> markers, boolean isWhitelist) {
+        // Belt-and-braces guard: even if a future caller forgets the outer
+        // MEKANISM_LOADED check, never touch Mekanism classes when it is absent.
+        if (!MEKANISM_LOADED) return false;
         boolean moved = false;
         long remainingBudget = com.portint.PortConfig.getFluidBudget();
         try {
@@ -1407,6 +1418,13 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
                         // forever after bindings are abandoned or servers shut down uncleanly.
                         if (timeout > 0 && lastActivityTime[col] != Long.MIN_VALUE
                                 && now - lastActivityTime[col] > timeout) {
+                            // Start a debounce window so this chunk is NOT force-loaded again
+                            // right away: otherwise  load → unload (timeout) → reload  would
+                            // thrash every timeout period while the machine keeps producing.
+                            ChunkPos tcp = new ChunkPos(t.pos());
+                            chunkReloadCooldown.put(
+                                    t.dimension().location().toString() + "|" + ChunkPos.asLong(tcp.x, tcp.z),
+                                    now + CHUNK_RELOAD_COOLDOWN_TICKS);
                             continue;
                         }
                         ServerLevel tl = serverLevel.getServer().getLevel(t.dimension());
@@ -1440,12 +1458,22 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             if (e.getValue().isEmpty()) it.remove();
         }
         // Add new needed chunks
+        // Expired debounce entries are purged here so the map never grows unbounded.
+        if (!chunkReloadCooldown.isEmpty()) {
+            chunkReloadCooldown.entrySet().removeIf(en -> now >= en.getValue());
+        }
         for (Map.Entry<ResourceKey<Level>, Set<Long>> e : neededChunks.entrySet()) {
             ServerLevel tl = serverLevel.getServer().getLevel(e.getKey());
             if (tl == null) continue;
             Set<Long> cur = forcedChunks.computeIfAbsent(e.getKey(), k -> new HashSet<>());
             for (long key : e.getValue()) {
                 if (!cur.contains(key)) {
+                    // Skip force-loading chunks that were released by the timeout fuse
+                    // within the debounce window, so the machine's chunk does not get
+                    // loaded → unloaded → reloaded every timeout period.
+                    Long cdUntil = chunkReloadCooldown.get(e.getKey().location().toString() + "|" + key);
+                    if (cdUntil != null && now < cdUntil) continue;
+                    chunkReloadCooldown.remove(e.getKey().location().toString() + "|" + key);
                     ChunkPos cp = new ChunkPos(key);
                     tl.setChunkForced(cp.x, cp.z, true);
                     cur.add(key);
@@ -1465,6 +1493,8 @@ public class InterfaceBlockEntity extends AENetworkedBlockEntity
             }
         }
         forcedChunks.clear();
+        // Whole-map release: the debounce window is irrelevant now.
+        chunkReloadCooldown.clear();
     }
 
     // ═════════════════════════════════════════════════════════════════
